@@ -15,7 +15,7 @@ cp -a "$main/build/obj" "$main/build/lib" "$main/build/etm" build/
 for d in sdl3 dxvk-native; do ln -sfn "$main/third_party/$d" "third_party/$d"; done
 ln -sfn "$main/.venv" .venv
 mkdir -p work/ab work/decomp work/logs
-[ -f "$main/work/ab/hash_a.txt" ] && cp "$main/work/ab/hash_a.txt" work/ab/
+[ -f "$main/work/ab/hash_a.txt" ] && cp "$main/work/ab/hash_a.txt" "$main/work/ab/hash_a.id" work/ab/
 [ -f "$main/work/dis_cache.pkl" ] && cp "$main/work/dis_cache.pkl" work/
 find gen -type f -exec touch {} +
 sleep 1
