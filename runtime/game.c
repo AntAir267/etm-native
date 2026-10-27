@@ -442,6 +442,10 @@ static int hook_projection_fn(CPU *c)
     return 0;
 }
 
+/* the frame end's wait (0x7c0915: until the frame's step has passed, QueryPerformanceCounter and
+   Sleep(0) from 0x7c0b4a) [verified: disassembly]: its Sleep(0) sleeps 0.2 ms a turn (sync.c) */
+int sleep0_spin_site(uint32_t ret) { return ret == 0x7c0b50u; }
+
 /* (LA Rush hooks the shared runtime calls: none of them apply yet) */
 int game_driving(void) { return 0; }
 /* the game's menus (the input update 0x7b53c2 reads the menu controls under this test): mode

@@ -533,7 +533,14 @@ API(KERNEL32, Sleep, 1)
         return 0;
     }
     if (ms == 0) {
-        sched_yield();
+        /* a wait-for-the-frame loop (reads the clock, Sleep(0), again: game.c names its call
+           sites) sleeps a little each turn instead of spinning a core at full load */
+        extern int sleep0_spin_site(uint32_t ret);
+        if (sleep0_spin_site(R32(c->esp))) {
+            struct timespec ts = {0, 200000};
+            nanosleep(&ts, NULL);
+        } else
+            sched_yield();
         return 0;
     }
     struct timespec ts = {ms / 1000, (long)(ms % 1000) * 1000000L};

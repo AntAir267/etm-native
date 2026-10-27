@@ -56,6 +56,8 @@ typedef struct Obj {
     uint32_t rate;                      /* playback rate */
     int loops;                          /* 1 once, 0 forever, n passes */
     float volume, pan;                  /* 0..1, pan 0.5 centre */
+    float send;                         /* reverb send: 3D samples by EAX's reverb mix, 2D by
+                                           AIL_set_sample_reverb_levels (none by default) */
     /* 3D */
     float pos[3], front[3], up[3];
     float maxd, mind;
@@ -265,6 +267,7 @@ static void apply_gain(Obj *o)
     /* equal-power pan, unity in the centre */
     float l = p > 0 ? 1.0f - p : 1.0f, r = p < 0 ? 1.0f + p : 1.0f;
     voice_set_gain(o->voice, v * l, v * r);
+    voice_set_send(o->voice, o->send);
 }
 
 static void start(Obj *o)
@@ -469,7 +472,13 @@ AIL(sample_volume_pan, 12)
     return 0;
 }
 /* (sample, dry, wet): EAX reverb levels (no reverb yet) */
-AIL(set_sample_reverb_levels, 12) { return 0; }
+/* (sample, dry 0..1, wet 0..1) */
+AIL(set_sample_reverb_levels, 12)
+{
+    Obj *o = smp_get(ARG(0));
+    if (o) { o->send = fl(ARG(2)); apply_gain(o); }
+    return 0;
+}
 AIL(set_sample_loop_count, 8)
 {
     Obj *o = obj_get(ARG(0), K_SAMPLE);
@@ -539,9 +548,43 @@ AIL(3D_provider_attribute, 12)
     if (ARG(2)) W32(ARG(2), n && !strcasecmp(n, "Maximum supported samples") ? 64 : 0);
     return 0;
 }
-AIL(set_3D_provider_preference, 12) { return 0; }
+/* (provider, name, &value). "EAX all parameters": the room as EAX 3 listener properties
+   (environment, size, diffusion, room, room HF, room LF (mB), decay time, decay HF and LF ratios,
+   reflections (mB), reflections delay, reflections pan, reverb (mB), reverb delay, ...); the game
+   hands the address of a pointer to one of its presets (0x9437b8 Generic, ...) [verified: values
+   at run time], or (EAX 2) the properties themselves. The reverb (dsound.c) takes the decay time,
+   its high-frequency ratio, the level room + reverb and the pre-delay. */
+static void eax_room(uint32_t p)
+{
+    if (!p)
+        return;
+    uint32_t first = R32(p);
+    if (first >= 0x400000u && first < 0x1000000u)   /* a pointer to the preset */
+        p = first;
+    uint32_t env = R32(p);
+    float size = fl(R32(p + 4)), decay = fl(R32(p + 24)), hf = fl(R32(p + 28)), rdelay = fl(R32(p + 40)),
+          vdelay = fl(R32(p + 60));
+    int32_t room = (int32_t)R32(p + 12), reverb = (int32_t)R32(p + 56);
+    if (env > 64 || !(size > 0.9f && size < 101) || !(decay > 0.09f && decay < 21) || room < -10000 || room > 0) {
+        LOGS("EAX all parameters: not EAX 3 properties (env %u, size %g, decay %g): left as it was", env, size, decay);
+        return;
+    }
+    float gain = (float)pow(10.0, (room + reverb) / 2000.0) * 2.0f;
+    LOGS("EAX room: environment %u, decay %.2f s (HF x%.2f), room %d + reverb %d mB, delays %.3f + %.3f s",
+         env, decay, hf, room, reverb, rdelay, vdelay);
+    sound_reverb_set(decay, hf, gain, rdelay + vdelay);
+}
+
+AIL(set_3D_provider_preference, 12)
+{
+    const char *n = gstr(ARG(1));
+    LOGS("AIL_set_3D_provider_preference(%s)", n ? n : "?");
+    if (n && !strcasecmp(n, "EAX all parameters"))
+        eax_room(ARG(2));
+    return 0;
+}
 AIL(3D_speaker_type, 4) { return 0; }                   /* AIL_3D_2_SPEAKER */
-AIL(set_3D_room_type, 8) { return 0; }
+AIL(set_3D_room_type, 8) { LOGS("AIL_set_3D_room_type(%u)", ARG(1)); return 0; }
 AIL(set_3D_distance_factor, 8) { return 0; }
 AIL(set_3D_rolloff_factor, 8)
 {
@@ -567,7 +610,12 @@ AIL(close_3D_listener, 4)
 }
 
 /* 3D samples */
-AIL(allocate_3D_sample_handle, 4) { return obj_new(K_3DSAMPLE); }
+AIL(allocate_3D_sample_handle, 4)
+{
+    uint32_t h = obj_new(K_3DSAMPLE);
+    obj_get(h, K_3DSAMPLE)->send = 1;
+    return h;
+}
 AIL(release_3D_sample_handle, 4) { Obj *o = obj_get(ARG(0), K_3DSAMPLE); if (o) release(o); return 0; }
 /* (sample, AILSOUNDINFO *): format, data, length, rate, bits, channels, samples, block size,
    initial pointer. 1 if it can play it. */
@@ -621,7 +669,19 @@ AIL(set_3D_sample_distances, 12)
     return 0;
 }
 /* (sample, name, &value): EAX settings (not heard) */
-AIL(set_3D_sample_preference, 12) { return 0; }
+/* (sample, name, &value): "EAX sample reverb mix" (-1: by distance, as EAX does: a full send
+   whose level follows the direct sound's) */
+AIL(set_3D_sample_preference, 12)
+{
+    Obj *o = obj_get(ARG(0), K_3DSAMPLE);
+    const char *n = gstr(ARG(1));
+    if (o && n && ARG(2) && !strcasecmp(n, "EAX sample reverb mix")) {
+        float m = fl(R32(ARG(2)));
+        o->send = m < 0 ? 1 : m > 1 ? 1 : m;
+        apply_gain(o);
+    }
+    return 0;
+}
 AIL(start_3D_sample, 4) { Obj *o = obj_get(ARG(0), K_3DSAMPLE); if (o) start(o); return 0; }
 AIL(stop_3D_sample, 4) { Obj *o = obj_get(ARG(0), K_3DSAMPLE); if (o) stop(o); return 0; }
 AIL(resume_3D_sample, 4) { Obj *o = obj_get(ARG(0), K_3DSAMPLE); if (o) resume(o); return 0; }

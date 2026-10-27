@@ -131,6 +131,7 @@ typedef struct Buf {
     int playing, looping;
     int loops_left;               /* runtime voices: passes still to play after this one (0: per looping) */
     int host_gain;                /* runtime voices: gain_l/gain_r set directly (voice_set_gain) */
+    float send;                   /* runtime voices: share sent to the reverb (voice_set_send) */
     uint64_t pos;                 /* play position in frames, 32.32 fixed point */
     float *hist;                  /* the HIST frames before hist_end as the mixer last saw them */
     uint32_t hist_end;
@@ -628,6 +629,120 @@ static void ds3d_apply(const Buf *b, float *gl, float *gr, double *pitch)
     *gr *= g * sinf(a) * 1.41421f > g ? g : g * sinf(a) * 1.41421f;
 }
 
+/* ------------------------------------------------------------------ reverb (sound.h)
+   A room reverb for the Miles stand-in's EAX settings: Freeverb's network (Jezar at Dreampoint,
+   public domain: eight parallel lowpass-feedback combs and four series allpasses a channel, the
+   right channel's delays 23 samples longer), with the combs' feedback set from the room's decay
+   time (each comb loses 60 dB in decay seconds), their damping from the high frequencies' share
+   of it, a pre-delay, and the output level. Voices send to it by their send share (the mixed
+   signal, after their gains); its output is added to the mix. */
+#define RV_COMBS 8
+#define RV_APS 4
+static const int rv_comb_len[RV_COMBS] = {1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617};
+static const int rv_ap_len[RV_APS] = {556, 441, 341, 225};
+#define RV_SPREAD 23
+#define RV_MAXPRE 9600
+static struct {
+    int on, rate;
+    float decay, hf_ratio, gain, predelay;      /* as set */
+    float fb[2][RV_COMBS], damp, wet;            /* derived for the rate */
+    float *comb[2][RV_COMBS], comb_lp[2][RV_COMBS];
+    int comb_n[2][RV_COMBS], comb_i[2][RV_COMBS];
+    float *ap[2][RV_APS];
+    int ap_n[2][RV_APS], ap_i[2][RV_APS];
+    float pre[2][RV_MAXPRE];
+    int pre_n, pre_i;
+    int dirty;
+} rv;
+static float *rv_bus;                  /* the frames' send buffer while step_all runs, or NULL */
+static int rv_bus_cap;
+
+void sound_reverb_set(float decay_s, float hf_ratio, float gain, float predelay_s)
+{
+    pthread_mutex_lock(&snd_lock);
+    rv.on = gain > 0.0001f && decay_s > 0.05f;
+    rv.decay = decay_s;
+    rv.hf_ratio = hf_ratio;
+    rv.gain = gain;
+    rv.predelay = predelay_s;
+    rv.dirty = 1;
+    pthread_mutex_unlock(&snd_lock);
+}
+
+static void rv_prepare(int rate)
+{
+    if (rv.rate != rate) {
+        double k = rate / 44100.0;
+        for (int c = 0; c < 2; c++) {
+            for (int i = 0; i < RV_COMBS; i++) {
+                int n = (int)((rv_comb_len[i] + c * RV_SPREAD) * k);
+                rv.comb[c][i] = realloc(rv.comb[c][i], sizeof(float) * (size_t)n);
+                memset(rv.comb[c][i], 0, sizeof(float) * (size_t)n);
+                rv.comb_n[c][i] = n;
+                rv.comb_i[c][i] = 0;
+                rv.comb_lp[c][i] = 0;
+            }
+            for (int i = 0; i < RV_APS; i++) {
+                int n = (int)((rv_ap_len[i] + c * RV_SPREAD) * k);
+                rv.ap[c][i] = realloc(rv.ap[c][i], sizeof(float) * (size_t)n);
+                memset(rv.ap[c][i], 0, sizeof(float) * (size_t)n);
+                rv.ap_n[c][i] = n;
+                rv.ap_i[c][i] = 0;
+            }
+        }
+        memset(rv.pre, 0, sizeof rv.pre);
+        rv.pre_i = 0;
+        rv.rate = rate;
+        rv.dirty = 1;
+    }
+    if (rv.dirty) {
+        for (int c = 0; c < 2; c++)
+            for (int i = 0; i < RV_COMBS; i++)
+                rv.fb[c][i] = (float)pow(10.0, -3.0 * rv.comb_n[c][i] / (double)rate / (rv.decay > 0.1f ? rv.decay : 0.1f));
+        float d = (1.0f - rv.hf_ratio) * 0.9f;   /* the highs dying faster: more damping */
+        rv.damp = d < 0.05f ? 0.05f : d > 0.7f ? 0.7f : d;
+        rv.wet = rv.gain;
+        int pn = (int)(rv.predelay * rate);
+        rv.pre_n = pn < 1 ? 1 : pn > RV_MAXPRE ? RV_MAXPRE : pn;
+        rv.dirty = 0;
+    }
+}
+
+static void rv_process(float *out, const float *in, int frames)
+{
+    for (int f = 0; f < frames; f++) {
+        float x[2] = {in[2 * f] * 0.015f, in[2 * f + 1] * 0.015f}, y[2];
+        for (int c = 0; c < 2; c++) {
+            float dl = rv.pre[c][rv.pre_i];
+            rv.pre[c][rv.pre_i] = x[c];
+            float acc = 0;
+            for (int i = 0; i < RV_COMBS; i++) {
+                float *buf = rv.comb[c][i];
+                int j = rv.comb_i[c][i];
+                float o = buf[j];
+                rv.comb_lp[c][i] = o * (1 - rv.damp) + rv.comb_lp[c][i] * rv.damp;
+                buf[j] = dl + rv.comb_lp[c][i] * rv.fb[c][i];
+                if (++j >= rv.comb_n[c][i]) j = 0;
+                rv.comb_i[c][i] = j;
+                acc += o;
+            }
+            for (int i = 0; i < RV_APS; i++) {
+                float *buf = rv.ap[c][i];
+                int j = rv.ap_i[c][i];
+                float b = buf[j];
+                buf[j] = acc + b * 0.5f;
+                acc = b - acc;
+                if (++j >= rv.ap_n[c][i]) j = 0;
+                rv.ap_i[c][i] = j;
+            }
+            y[c] = acc;
+        }
+        if (++rv.pre_i >= rv.pre_n) rv.pre_i = 0;
+        out[2 * f] += y[0] * rv.wet;
+        out[2 * f + 1] += y[1] * rv.wet;
+    }
+}
+
 static void mix_voice(Buf *b, float *out, int frames, int rate)
 {
     float gl = b->gain_l * master_l, gr = b->gain_r * master_r;
@@ -652,6 +767,10 @@ static void mix_voice(Buf *b, float *out, int frames, int rate)
         interp(b, base, b->pos, step, half, use_hist && moved < hist_span, &l, &r);
         out[2 * i] += l * gl;
         out[2 * i + 1] += r * gr;
+        if (rv_bus && b->send > 0) {
+            rv_bus[2 * i] += l * gl * b->send;
+            rv_bus[2 * i + 1] += r * gr * b->send;
+        }
         b->pos += step;
         if (moved < merge_span)
             moved += step;
@@ -674,9 +793,23 @@ static void mix_voice(Buf *b, float *out, int frames, int rate)
 
 static void step_all(float *out, int frames, int rate)
 {
+    static float *rv_buf;
+    int reverb = out && rv.on;
+    if (reverb) {
+        if (frames > rv_bus_cap) {
+            rv_bus_cap = frames;
+            rv_buf = realloc(rv_buf, sizeof(float) * 2 * (size_t)frames);
+        }
+        memset(rv_buf, 0, sizeof(float) * 2 * (size_t)frames);
+        rv_prepare(rate);
+        rv_bus = rv_buf;
+    }
     for (Buf *b = bufs; b; b = b->next)
         if (!b->primary && b->playing)
             mix_voice(b, out, frames, rate);
+    rv_bus = NULL;
+    if (reverb)
+        rv_process(out, rv_buf, frames);
     out_frames += (uint64_t)frames;
     out_rate = rate;
 }
@@ -2233,6 +2366,15 @@ void voice_set_gain(int id, float l, float r)
         b->gain_l = l;
         b->gain_r = r;
     }
+    pthread_mutex_unlock(&snd_lock);
+}
+
+void voice_set_send(int id, float send)
+{
+    pthread_mutex_lock(&snd_lock);
+    Buf *b = voice_find(id);
+    if (b)
+        b->send = send < 0 ? 0 : send > 1 ? 1 : send;
     pthread_mutex_unlock(&snd_lock);
 }
 

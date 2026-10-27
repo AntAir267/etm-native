@@ -66,6 +66,11 @@ void voice_pause(int id);
 void voice_rewind(int id);
 void voice_set_gain(int id, float l, float r);
 void voice_set_rate(int id, uint32_t hz);
+void voice_set_send(int id, float send);             /* share sent to the reverb, 0 (dry) .. 1 */
+
+/* The room reverb voices send to (dsound.c): decay seconds (-60 dB), the high frequencies' decay
+   as a share of it, output gain (linear), pre-delay seconds; gain 0 turns it off. */
+void sound_reverb_set(float decay_s, float hf_ratio, float gain, float predelay_s);
 int voice_playing(int id, uint32_t *pos_frames);
 
 /* A streaming source (DirectMusic's synthesizer, dmusic.c): fn adds frames of stereo float at the
