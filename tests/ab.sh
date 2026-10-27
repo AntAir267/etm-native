@@ -28,14 +28,20 @@ lobby) keys="1200:RETURN,1400:DOWN,1430:RETURN,1700:RETURN,2000:ESCAPE,2200:RETU
 *) echo "unknown route $route"; exit 2 ;;
 esac
 mkdir -p "$out"
+# one check at a time on the machine, across worktrees (helpers share the main checkout's lock)
+main=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
+mkdir -p "$main/work"
+exec 9> "$main/work/ab.lock"
+flock 9
 run() {    # run <a|b> <ETM_DECOMP_OFF value or empty>
     local u="$out/user_$1"
     rm -rf "$u"; mkdir -p "$u"
     ETM_KEYS="$keys" ETM_DECOMP_OFF="$2" timeout -s KILL 900 ./build/etm --test --user "$u" --hidden \
         --frames "$frames" --hash "$out/hash_$1.txt" --hash-every "$every" "${extra[@]}" > "$out/log_$1.txt" 2>&1 || true
 }
-# the translation's identity: the generated code and the runtime outside runtime/decomp/
-id=$( (cat gen/funcs.h; cat runtime/*.c runtime/*.h; echo "$route $frames $every ${extra[*]}") | sha1sum | cut -c1-16)
+# the translation's identity: the generated code, the runtime outside runtime/decomp/ and the
+# stack fixes (on in both modes)
+id=$( (cat gen/funcs.h; cat runtime/*.c runtime/*.h runtime/decomp/stackfix.c; echo "$route $frames $every ${extra[*]}") | sha1sum | cut -c1-16)
 if [ $fresh = 0 ] && [ -s "$out/hash_a.txt" ] && [ "$(cat "$out/hash_a.id" 2>/dev/null)" = "$id" ]; then
     run b ""
 else
