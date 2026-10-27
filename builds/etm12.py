@@ -38,6 +38,11 @@ HOOKS = {
     # stack leftovers (runtime/decomp/stackfix.c): frames cleared on entry in both modes, for the
     # bytes the original copies into game memory without writing them first
     0x64a2e9: 'sf_64a2e9',
+    # the frame timer (0xe7cca8): its reading (seconds since the frame began) and its advance by
+    # a step (in cut scenes, keeping the remainder); the frame end (0x7c0915) paces frames by them.
+    # frame.c: with frames drawn between updates the frame end neither waits nor advances it
+    0x677a90: 'timer_elapsed',
+    0x7c1b30: 'timer_advance',
 }
 
 # the drawing code's functions, each hookable for its rewrite (runtime/decomp/, decomp.h DECOMP)

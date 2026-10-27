@@ -457,13 +457,14 @@ int game_front_end(void)
     return mode == 0 || mode == 9 || R32(0x97ed80) == 1 ||
            (fe && (R32(fe + 0x6c) == 2 || R8(fe + 0x7c) != 0));
 }
-void frame_rate_reapply(void) {}
 
 void game_init(void)
 {
     extern void decomp_install(void), stackfix_install(void);
     decomp_install();                   /* the drawing code's rewrites (runtime/decomp/) */
     stackfix_install();                 /* frames cleared in both modes (runtime/decomp/stackfix.c) */
+    extern void frame_install(void);
+    frame_install();                    /* frames between updates (runtime/decomp/frame.c) */
     resolution_choose();
     hook_settings_load = hook_settings_load_fn;
     hook_blit_draw = hook_blit_draw_fn;

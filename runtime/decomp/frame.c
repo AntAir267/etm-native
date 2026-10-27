@@ -10,7 +10,10 @@
    see them (rep movsd leaves esi/edi past the copy), byte arguments pushed in a whole register
    whose upper bytes are the previous callee's. */
 #include <string.h>
+#include <strings.h>
 #include "decomp.h"
+#include "../interp.h"
+#include "../options.h"
 
 /* game state */
 #define STATE_FLAGS      0x97ecccu  /* bits 1, 4, 8, 0x20, 0x40, 0x80 tested here (meanings unknown) */
@@ -93,6 +96,91 @@ static void copy_dwords(CPU *c, uint32_t dst, uint32_t src, uint32_t n)
     c->ecx = 0;
 }
 
+/* FRAMES BETWEEN UPDATES (option frame_rate = uncapped; DESIGN.md 9b). In game, a frame no
+   longer waits for its 1/60 s: the updates it runs follow the clock (0 or more, the fraction
+   carried), and the render pass draws what moves blended between the last two updates by the
+   previous frame's carry (the render pass comes before the frame's updates, so it shows the
+   updates the previous frame ran, as of the previous frame's time: a constant one update and one
+   frame behind, as the original is one frame behind). Frames run at the screen's rate (vsync) or
+   frame_limit's. The game's frame-counting code sees whole updates: the measured rate it divides
+   60 by is 60 / the frame's updates (0x71c1d5, the first update's, gets the frame's count).
+   Front-end frames and in-game frames that stop before the updates stay one a 1/60 s. */
+static int uncapped = -1;           /* the option, read on first use and on changes */
+static int frame_free;              /* this frame's updates follow the clock; no frame-end wait */
+static int frame_free_updates;
+static int was_free;                /* the previous frame was */
+static double carry;                /* updates due, carried (0..1) */
+static double free_last_ms;
+double frame_blend;                 /* where the render pass draws between the last two updates */
+
+void frame_rate_reapply(void) { uncapped = -1; }
+int frame_rate_uncapped(void)
+{
+    if (uncapped < 0)
+        uncapped = !strcasecmp(option_str("frame_rate", "60"), "uncapped");
+    return uncapped;
+}
+/* main.c, at each frame's end: the frame's length in the game's own frames (a free frame's
+   updates; any other frame is one), for scripted input and test checkpoints */
+int frame_ticks_end(void)
+{
+    int t = frame_free ? frame_free_updates : 1;
+    was_free = frame_free;
+    frame_free = 0;
+    return t;
+}
+
+static uint32_t free_count(CPU *c, uint32_t out)
+{
+    double rate = RF32(DESIGN_RATE), due;
+    double now = deterministic ? 0 : host_ms();
+    if (!was_free)
+        due = 1;                                    /* (the first: one update, as the original) */
+    else
+        due = (deterministic ? test_frame_ms : now - free_last_ms) * rate / 1000.0;
+    free_last_ms = now;
+    if (due < 0) due = 0;
+    frame_blend = carry;
+    carry += due;
+    uint32_t n = (uint32_t)carry;
+    if (n > 4) {                                    /* (too slow: the time beyond is dropped) */
+        n = 4;
+        carry = 4;
+    }
+    carry -= n;
+    W32(out, n);
+    WF32(UPDATES_PER_FRAME, (float)n);
+    W32(CARRY, 0);
+    WF32(MEASURED_RATE, n ? (float)(rate / n) : 1e9f);
+    frame_free = 1;
+    frame_free_updates = (int)n;
+    return n;
+}
+
+/* the frame timer (0x677a90 reads it, 0x7c1b30 advances it by a step in cut scenes): in a free
+   frame the frame end (0x7c0915) reads one update's step, already passed (so it picks that step
+   and does not wait), and restarts the timer where it would advance it */
+static int timer_elapsed(CPU *c)
+{
+    uint32_t ret = R32(c->esp);
+    if (!frame_free || (ret != 0x7c0ac0u && ret != 0x7c0b3eu))
+        return 0;
+    return decomp_ret_st0(c, c->esp, (f80)RF32(0x8fbde4), 0);
+}
+static int timer_advance(CPU *c)
+{
+    uint32_t e = c->esp;
+    if (!frame_free || R32(e) != 0x7c0b8fu)
+        return 0;
+    game_callm(c, 0x677ae0u, c->ecx, 0);
+    return decomp_ret(c, e, c->eax, 1);
+}
+void frame_install(void)
+{
+    hook_timer_elapsed = timer_elapsed;
+    hook_timer_advance = timer_advance;
+}
+
 /* 0x6469f1 (unused, out): the number of updates this frame: 60 / the target rate, one more for
    each 60 a second the measured rate falls short (up to 5 more), plus the carried fraction
    (snapped to 0 below 0.01, to 1 above 0.99). *out: the updates that run 0x646367 (1, 2 below
@@ -100,6 +188,8 @@ static void copy_dwords(CPU *c, uint32_t dst, uint32_t src, uint32_t n)
 static int dc_6469f1(CPU *c)
 {
     uint32_t e = c->esp, fp = e - 4, out = ARG(1), ebp = c->ebp;
+    if (frame_rate_uncapped())
+        return decomp_ret(c, e, free_count(c, out), 0);
     W32(fp, ebp);
     c->ebp = fp;
     c->esp = fp - 8;
@@ -242,6 +332,8 @@ static int dc_646e8b(CPU *c)
     W8(UPDATE_ARG, 0);
 
     /* the render pass: each view as the last updates left it */
+    if (frame_free)
+        interp_apply(frame_blend);
     uint32_t level = 0;
     for (uint32_t v = views; v; v = R32(v + VIEW_NEXT)) {
         copy_dwords(c, VIEW, v, VIEW_DWORDS);
@@ -273,6 +365,7 @@ static int dc_646e8b(CPU *c)
         }
         copy_dwords(c, v, VIEW, VIEW_DWORDS);
     }
+    interp_restore();
 
     /* a control switching what the player controls [guess: 0x601171 (1) / (2)] */
     if (!(R32(STATE_FLAGS) & 0xe) && !R32(R32(LEVEL_PTR) + 0x170) &&
@@ -511,6 +604,8 @@ restart:
             game_call(c, 0x5f5e15u, 1, R32(PAD2));
         }
         game_call(c, 0x646af7u, 3, UPDATE_ARG, R32(UPDATE_INDEX), n);
+        if (frame_rate_uncapped())
+            interp_game_update();           /* what moves, copied (interp_game.c) */
         if (R32(R32(GAME) + 0x1e0))
             W8(UPDATE_ARG, 0);
         if (R32(lvl0) & 2)

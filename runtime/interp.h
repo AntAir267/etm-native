@@ -12,3 +12,7 @@ void interp_step_end(void);
 void interp_apply(double blend);                /* before drawing */
 void interp_restore(void);                      /* after drawing */
 extern float interp_jump;                       /* game units a step that count as a jump (not blended) */
+
+/* interp_game.c: this game's fields, after each update (frame.c) */
+void interp_game_update(void);
+extern double frame_blend;

@@ -131,6 +131,9 @@ void frame_limit_options(void);     /* main.c: "frame_limit" read again */
 int frame_limit_screen(void);       /* ... its "screen" rate: 3 under the screen's refresh */
 int host_refresh_hz(void);          /* win.c: the screen's refresh rate (60 when unknown) */
 double now_ms(void);         /* milliseconds since start */
+double host_ms(void);        /* the host's clock, whatever --test does */
+extern double test_frame_ms; /* --test: the virtual clock's step a frame (ETM_TEST_FPS) */
+extern unsigned long sim_ticks;  /* frames in the game's own 60 a second (frame.c: a free frame counts its updates) */
 
 /* ------------------------------------------------------------------ handles */
 enum { H_FREE = 0, H_FILE, H_EVENT, H_MUTEX, H_THREAD, H_FIND, H_SEMAPHORE, H_MISC };

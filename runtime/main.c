@@ -552,6 +552,16 @@ static unsigned long dump_frame, dump_call;
 static char dump_path[1024];
 double run_seconds_limit;
 unsigned long frame_count;
+double test_frame_ms = 1000.0 / 60.0;
+/* The game's own frames: with frames drawn between updates (frame.c, frame_rate = uncapped) a frame
+   counts the updates it ran, so scripted input (ETM_KEYS), --hash checkpoints and --frames fall on
+   the same updates at any drawn rate; otherwise one a frame, as frame_count */
+unsigned long sim_ticks;
+static unsigned long sched(void)
+{
+    extern int frame_rate_uncapped(void);
+    return frame_rate_uncapped() ? sim_ticks : frame_count;
+}
 static unsigned long wait_frames;       /* input_wait's frames */
 
 extern void timers_run_due(double now);
@@ -674,6 +684,10 @@ void game_frame(unsigned long frame);   /* game.c */
 void frame_presented(void)
 {
     frame_count++;
+    {
+        extern int frame_ticks_end(void);
+        sim_ticks += (unsigned long)frame_ticks_end();
+    }
     extern void watch_frame_tick(void);
     watch_frame_tick();                 /* ETM_WATCH (watch.c) */
     extern void det_yield(void);
@@ -720,7 +734,8 @@ void frame_presented(void)
             vstep = e && atof(e) > 0 ? 1000.0 / atof(e) : 1000.0 / 60.0;
             vstep_from = at ? strtoul(at + 1, NULL, 10) : 0;
         }
-        vclock += frame_count >= vstep_from ? vstep : 1000.0 / 60.0;
+        test_frame_ms = frame_count >= vstep_from ? vstep : 1000.0 / 60.0;
+        vclock += test_frame_ms;
         timers_run_due(vclock);
     }
     {
@@ -742,21 +757,26 @@ void frame_presented(void)
         }
     }
     frame_limit();
-    if (hashfp && frame_count % hash_every == 0) {
-        fprintf(hashfp, "%lu %lu %016llx %016llx\n", frame_count, api_calls, (unsigned long long)mem_hash(),
+    static unsigned long hashed = (unsigned long)-1;
+    if (hashfp && sched() % hash_every == 0 && sched() != hashed) {
+        hashed = sched();
+        fprintf(hashfp, "%lu %lu %016llx %016llx\n", sched(), api_calls, (unsigned long long)mem_hash(),
                 (unsigned long long)draw_hash);
         fflush(hashfp);
     }
-    if (dump_frame && frame_count >= dump_frame) {
-        /* ETM_DUMP_COUNT=N: N frames running from FRAME, each to FILE.<frame> */
+    static unsigned long dumped = (unsigned long)-1;
+    if (dump_frame && sched() >= dump_frame && sched() != dumped) {
+        /* ETM_DUMP_COUNT=N: N frames running from FRAME, each to FILE.<frame> (frames as sched()
+           counts them: the first frame to reach each) */
         static long count = -1;
         if (count < 0) count = getenv("ETM_DUMP_COUNT") ? atol(getenv("ETM_DUMP_COUNT")) : 0;
-        if (frame_count == dump_frame || frame_count < dump_frame + (unsigned long)count) {
+        if (sched() == dump_frame || sched() < dump_frame + (unsigned long)count) {
             char p[1200];
-            if (count > 0) snprintf(p, sizeof p, "%s.%lu", dump_path, frame_count);
+            dumped = sched();
+            if (count > 0) snprintf(p, sizeof p, "%s.%lu", dump_path, sched());
             else snprintf(p, sizeof p, "%s", dump_path);
             mem_dump(p);
-            LOG(LOG_ALWAYS, "memory of frame %lu written to %s", frame_count, p);
+            LOG(LOG_ALWAYS, "memory of frame %lu written to %s", sched(), p);
         }
     }
     {
@@ -786,7 +806,7 @@ void frame_presented(void)
             LOG(LOG_ALWAYS, "%s", line);
         }
     }
-    if (run_frames_limit && frame_count >= (unsigned long)run_frames_limit) {
+    if (run_frames_limit && sched() >= (unsigned long)run_frames_limit) {
         LOG(LOG_ALWAYS, "frame limit %d reached", run_frames_limit);
         process_exit(0);
     }
@@ -794,8 +814,8 @@ void frame_presented(void)
         LOG(LOG_ALWAYS, "time limit reached after %lu frames", frame_count);
         process_exit(0);
     }
-    game_frame(frame_count + wait_frames);
-    input_frame(frame_count + wait_frames);
+    game_frame(sched() + wait_frames);
+    input_frame(sched() + wait_frames);
     win_pump();
 }
 
