@@ -46,6 +46,8 @@ HOOKS = {
     # the input poll (the main loop's, before each frame: devices read, current -> previous):
     # frame.c skips it before a frame drawn between updates that runs none
     0x7b5333: 'input_poll',
+    # the SSE-support test (setjmp into 0xe80780 around a movaps): its saved stack position cleared
+    0x8bbd20: 'sf_8bbd20',
 }
 
 # the drawing code's functions, each hookable for its rewrite (runtime/decomp/, decomp.h DECOMP)
