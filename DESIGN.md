@@ -107,6 +107,20 @@ the same relocations when it maps the file (runtime/main.c load_module).
   default, shadow filter); the calls reach DXVK as the game makes them. ETM_LOG_2D=1 logs every
   screen-space draw with its caller and extent.
 
+### 7. Controllers (pad.c, game.c)
+- The game's own joystick support [verified: decompiles 0x7b4b78, 0x7b53c2, 0x7b8470 and the
+  binding table read at run time]: DIJOYSTATE2; X/Y move, RotZ strafes, the D-pad works menus;
+  buttons 1-12 and the D-pad's directions are copied to +0x250 of the input object (0x e7c018)
+  where the binding check reaches them as codes -9 .. -24 (-1 .. -8 the mouse). With a joystick
+  present the game fills each binding's second slot with joystick defaults (listed in pad.c).
+- The controller's buttons follow the repack's Xidi "Matrix" numbering (Y 1, RT 2, A 3, B 4,
+  LT 7, X 8, Back 10, LS 11, RS 12, Start = Escape key, right stick across RotZ), which with
+  those defaults is the Xbox version's layout (its manual, archive.org xboxmanual_Enter_the_Matrix).
+  LB / RB, which Xidi used for RotZ, get buttons 5 / 6 (switch shooting / hand-to-hand, and the
+  right mouse's second action) so every default has a button. In menus (game.c game_front_end,
+  the input update's own test) A also presses Enter and B Escape: the game's joystick accept is
+  button 2 (RT).
+
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/etm12.py; first translator run; Miles
   stand-in, ReadFileEx; first runs: the intro movies (Atari, Warner Bros., Shiny) play through
@@ -123,3 +137,5 @@ the same relocations when it maps the file (runtime/main.c load_module).
 - 2026-10-26: resolution and widescreen: desktop size by default, Hor+ 3D, 2D kept 4:3 and
   centred, full-width fades and bars, pillarboxed movies [verified: 1080p frames of the title,
   a cinematic, character select, the in-engine intro and the lobby].
+- 2026-10-26: controllers: the Xbox layout through the game's own joystick bindings; the whole
+  front end and into the lobby with the scripted controller only [verified: frames].

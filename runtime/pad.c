@@ -2,23 +2,27 @@
    (win.c), and ETM_PAD, a scripted controller for headless tests that goes through the
    same calls.
 
-   L.A. Rush reads a joystick through its own bindings (Controller Configurations, Joystick),
-   whose defaults are meant for a PlayStation-style USB pad: steer on the X axis, Camera button
-   1, Hand brake 2, Nitro 3, Look back 4, Brake 5, Gas 6, Shift down 7, Shift up 8, Map/GPS 9,
-   Pause 10. The controller's buttons are numbered so those defaults give the Xbox version's
-   layout: Y camera, B hand brake, A nitro, X look back, LT brake, RT gas, LB shift down,
-   RB shift up, Back map, Start pause; the left stick or the D-pad steer. Axes: X the left stick
-   (the D-pad at full lock when the stick rests), Y its vertical, Z the triggers (RT - LT), RX/RY
-   the right stick.
-
-   In the front end the game reads the joystick through other bindings (0x5648f0): button 2
-   accepts and button 3 goes back (in a race, the pause menu included, button 3 is the one that
-   accepts, as nitro is A on the Xbox): there A and B swap their buttons, so A accepts and B goes
-   back everywhere. The front end reads the stick and the D-pad's left and right too (the X axis);
-   up and down on the D-pad, and Start, also press keys (arrows; Space and Enter, which the title
-   wants), as do the stick's directions. Dead zone: a round one on both sticks against resting
-   drift (controller_deadzone in options.txt, percent, default 6), the rest of the travel
-   stretched over the range. */
+   Enter the Matrix reads a DirectInput joystick (0x7b4b78): the X/Y axes move, RotZ strafes
+   (0x7b53c2), the D-pad works the menus, and buttons 1-12 and the D-pad's directions can be
+   bound to actions; with a joystick present the game binds them itself [verified: the binding
+   table at 0x97f844 read at run time]:
+     Button 1 punch / fire (on foot), 2 primary action and the menus' accept, 3 jump, 4 kick,
+     5 switch shooting / hand-to-hand, 6 (right mouse's other action), 7 Focus, 8 action /
+     defend, 10 weapon menu, 12 first person; D-pad up / down weapons, right zoom out;
+     driving: 3 accelerate, 7 brake, 8 emergency brake, 2 view, 4 Ghost assist, D-pad looks;
+     hovercraft: 3 / 4 speed, 2 view, 1 fire.
+   The controller's buttons are numbered as the 2004 repack's Xidi "Matrix" layout numbers them
+   (Xidi.ini), which with those defaults gives the Xbox version's layout (its manual): A jump,
+   B kick, X action / defend, Y punch, LT Focus, RT fire, Back weapon menu, right stick click
+   first person, Start pause; LB and RB (no button in Xidi's layout) get buttons 5 and 6:
+     left stick   X, Y (full at 90 % of its travel, Xidi's SaturationPercentStickLeft)
+     right stick  RotZ (across: strafe), Z (up and down)
+     D-pad        POV 0
+     Y 1, RT 2, A 3, B 4, LB 5, RB 6, LT 7, X 8, Back 10, left stick click 11, right stick click 12
+     Start        the Escape key (the pause menu)
+   In menus A also presses Enter and B Escape (the game's joystick accept is button 2, the
+   right trigger).    Dead zone: a round one on both sticks against resting drift (controller_deadzone in
+   options.txt, percent, default 6), the rest of the travel stretched over the range. */
 #define _GNU_SOURCE
 #include <math.h>
 #include <pthread.h>
@@ -48,24 +52,23 @@ static int split_slot = -1;
 static int joy_button(int b)
 {
     switch (b) {
-    case PAD_Y: return 0;       /* camera */
-    case PAD_B: return 1;       /* hand brake (back in the front end: pad_button) */
-    case PAD_A: return 2;       /* nitro (accept in the front end) */
-    case PAD_X: return 3;       /* look back */
-    case PAD_LB: return 6;      /* shift down */
-    case PAD_RB: return 7;      /* shift up */
-    case PAD_BACK: return 8;    /* map / GPS */
-    case PAD_START: return 9;   /* pause */
+    case PAD_Y: return 0;
+    case PAD_A: return 2;
+    case PAD_B: return 3;
+    case PAD_LB: return 4;
+    case PAD_RB: return 5;
+    case PAD_X: return 7;
+    case PAD_BACK: return 9;
     case PAD_LSTICK: return 10;
     case PAD_RSTICK: return 11;
-    case PAD_GUIDE: return 12;
     }
     return -1;
 }
-#define JOY_BRAKE 4
-#define JOY_GAS 5
-#define TRIGGER_DOWN 1000      /* a trigger counts as its button from 3 % of its travel (the gas and brake
-                                  then follow the travel: hook_pad_state, game.c) */
+#define JOY_LT 6
+#define JOY_RT 1
+#define TRIGGER_DOWN 8000      /* a trigger counts as its button from a quarter of its travel */
+#define DIK_ESCAPE 0x01
+#define LEFT_FULL 0.90         /* the left stick reaches full output at 90 % of its travel */
 
 /* keys the controller presses in menus (DirectInput key codes) */
 #define DIK_RETURN 0x1c
@@ -75,22 +78,11 @@ static int joy_button(int b)
 #define DIK_RIGHT 0xcd
 #define DIK_DOWN 0xd0
 extern int game_driving(void);
-static uint8_t menu_key_down[256];
 
 /* the front end (menus) as against play: game.c */
 extern int game_front_end(void);
 static int front_end(void) { return game_front_end(); }
 
-static void menu_key(int dik, int down)
-{
-    if (down && game_driving())
-        return;
-    if (!down && !menu_key_down[dik])
-        return;
-    menu_key_down[dik] = (uint8_t)down;
-    input_key(dik, down);
-    input_used(1);                      /* still the controller (the button icons stay) */
-}
 
 static int clamp16(double v) { return v < -32768 ? -32768 : v > 32767 ? 32767 : (int)lround(v); }
 
@@ -126,34 +118,17 @@ void pad_detach(int slot)
         input_used(0);
 }
 
-/* the arrow keys, held while the D-pad or the stick holds them (0 left, 1 right, 2 up, 3 down) */
-static uint8_t dpad_dir[4], stick_dir[4];
-static void arrow(int i, int stick, int down)
-{
-    static const int dik[4] = {DIK_LEFT, DIK_RIGHT, DIK_UP, DIK_DOWN};
-    (stick ? stick_dir : dpad_dir)[i] = (uint8_t)down;
-    int want = dpad_dir[i] || stick_dir[i];
-    if (want != menu_key_down[dik[i]])
-        menu_key(dik[i], want);
-}
 
 /* the X axis: the left stick, or the D-pad at full lock while the stick rests */
 static void steer(int slot)
 {
     Pad *p = &pads[slot];
     int x = p->axis[PAD_LX], y = p->axis[PAD_LY];
-    double r = hypot(x, y), k = r > stick_dead ? (r - stick_dead) / (32767 - stick_dead) * 32767 / r : 0;
+    double full = LEFT_FULL * 32767;
+    double r = hypot(x, y), k = r > stick_dead ? (r - stick_dead) / (full - stick_dead) * 32767 / r : 0;
     int sx = clamp16(x * k), sy = clamp16(y * k);
-    if (sx == 0)
-        sx = p->button[PAD_DLEFT] ? -32768 : p->button[PAD_DRIGHT] ? 32767 : 0;
     input_joy_axis(slot, INPUT_AXIS_X, sx);
     input_joy_axis(slot, INPUT_AXIS_Y, sy);
-    /* the stick as arrow keys in menus, with a little hysteresis */
-    for (int i = 0; i < 4; i++) {
-        int want = i == 0 ? x < -20000 : i == 1 ? x > 20000 : i == 2 ? y < -20000 : y > 20000;
-        if (want && !stick_dir[i]) arrow(i, 1, 1);
-        else if (!want && stick_dir[i] && abs(i < 2 ? x : y) < 12000) arrow(i, 1, 0);
-    }
 }
 
 /* the left stick's X for the car's steering (game.c): -1 .. 1 past the round dead zone, the
@@ -174,6 +149,17 @@ double pad_steer(void)
     return best > 1 ? 1 : best < -1 ? -1 : best;
 }
 
+/* the right stick (round dead zone, the rest stretched over the range): across on RotZ, up and
+   down on Z */
+static void right_stick(int slot)
+{
+    Pad *p = &pads[slot];
+    int x = p->axis[PAD_RX], y = p->axis[PAD_RY];
+    double r = hypot(x, y), k = r > stick_dead ? (r - stick_dead) / (32767 - stick_dead) * 32767 / r : 0;
+    input_joy_axis(slot, INPUT_AXIS_RZ, clamp16(x * k));
+    input_joy_axis(slot, INPUT_AXIS_Z, clamp16(y * k));
+}
+
 void pad_axis(int slot, int axis, int value)
 {
     if (slot < 0 || slot >= INPUT_MAX_JOYS || axis < 0 || axis >= PAD_AXES)
@@ -187,20 +173,16 @@ void pad_axis(int slot, int axis, int value)
         return;
     if (abs(value) > 12000)
         input_used(1);
+    (void)lt; (void)rt;
     if (axis == PAD_LT || axis == PAD_RT) {
-        input_joy_axis(slot, INPUT_AXIS_Z, clamp16((double)rt - lt));
-        input_joy_button(slot, axis == PAD_RT ? JOY_GAS : JOY_BRAKE, value > TRIGGER_DOWN);
+        input_joy_button(slot, axis == PAD_RT ? JOY_RT : JOY_LT, value > TRIGGER_DOWN);
         return;
     }
     if (axis == PAD_LX || axis == PAD_LY) {
         steer(slot);
         return;
     }
-    /* the right stick: round dead zone, the rest stretched over the range */
-    int x = p->axis[PAD_RX], y = p->axis[PAD_RY];
-    double r = hypot(x, y), k = r > stick_dead ? (r - stick_dead) / (32767 - stick_dead) * 32767 / r : 0;
-    input_joy_axis(slot, INPUT_AXIS_RX, clamp16(x * k));
-    input_joy_axis(slot, INPUT_AXIS_RY, clamp16(y * k));
+    right_stick(slot);
 }
 
 void pad_button(int slot, int button, int down)
@@ -218,36 +200,35 @@ void pad_button(int slot, int button, int down)
     pthread_mutex_unlock(&pad_lock);
     if (slot == split_slot)
         return;
-    switch (button) {
-    case PAD_START: menu_key(DIK_SPACE, down); menu_key(DIK_RETURN, down); break;
-    case PAD_DLEFT: arrow(0, 0, down); break;
-    case PAD_DRIGHT: arrow(1, 0, down); break;
-    case PAD_DUP: arrow(2, 0, down); break;
-    case PAD_DDOWN: arrow(3, 0, down); break;
+    (void)up; (void)dn; (void)l; (void)r;
+    if (button == PAD_START) {                  /* the Escape key: the game's pause menu */
+        input_key(DIK_ESCAPE, down);
+        return;
+    }
+    /* in menus A is Enter and B Escape too (the button pressed is the one released) */
+    if (button == PAD_A || button == PAD_B) {
+        static uint8_t keyed[INPUT_MAX_JOYS][2];
+        int k = button == PAD_B, dik = k ? DIK_ESCAPE : DIK_RETURN;
+        if (down && front_end()) {
+            keyed[slot][k] = 1;
+            input_key(dik, 1);
+        } else if (!down && keyed[slot][k]) {
+            keyed[slot][k] = 0;
+            input_key(dik, 0);
+        }
     }
     if (button >= PAD_DUP && button <= PAD_DRIGHT) {
+        pthread_mutex_lock(&pad_lock);
+        int u = p->button[PAD_DUP], d = p->button[PAD_DDOWN], lf = p->button[PAD_DLEFT], rg = p->button[PAD_DRIGHT];
+        pthread_mutex_unlock(&pad_lock);
         int v = INPUT_POV_CENTERED;
-        if (up && r) v = 4500; else if (r && dn) v = 13500;
-        else if (dn && l) v = 22500; else if (l && up) v = 31500;
-        else if (up) v = 0; else if (r) v = 9000; else if (dn) v = 18000; else if (l) v = 27000;
+        if (u && rg) v = 4500; else if (rg && d) v = 13500;
+        else if (d && lf) v = 22500; else if (lf && u) v = 31500;
+        else if (u) v = 0; else if (rg) v = 9000; else if (d) v = 18000; else if (lf) v = 27000;
         input_joy_pov(slot, 0, v);
-        steer(slot);
         return;
     }
     int jb = joy_button(button);
-    if (button == PAD_A || button == PAD_B) {
-        /* the button pressed is the one released, whatever the screen by then */
-        static int8_t held_as[INPUT_MAX_JOYS][2];
-        int k = button == PAD_B;
-        if (down) {
-            if (front_end())
-                jb = 3 - jb;
-            held_as[slot][k] = (int8_t)(jb + 1);
-        } else if (held_as[slot][k]) {
-            jb = held_as[slot][k] - 1;
-            held_as[slot][k] = 0;
-        }
-    }
     if (jb >= 0)
         input_joy_button(slot, jb, down);
 }

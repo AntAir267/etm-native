@@ -194,7 +194,15 @@ int ui2d_layout(uint32_t caller, float minx, float maxx, float miny, float maxy,
 
 /* (LA Rush hooks the shared runtime calls: none of them apply yet) */
 int game_driving(void) { return 0; }
-int game_front_end(void) { return 1; }
+/* the game's menus (the input update 0x7b53c2 reads the menu controls under this test): mode
+   [0x947f08] 0 or 9, [0x97ed80] == 1, or a front-end screen [0x97cef0] in state 2 / flagged */
+int game_front_end(void)
+{
+    int32_t mode = (int32_t)R32(0x947f08);
+    uint32_t fe = R32(0x97cef0);
+    return mode == 0 || mode == 9 || R32(0x97ed80) == 1 ||
+           (fe && (R32(fe + 0x6c) == 2 || R8(fe + 0x7c) != 0));
+}
 void frame_rate_reapply(void) {}
 
 void game_init(void)
@@ -206,7 +214,18 @@ void game_init(void)
 
 void game_frame(unsigned long frame)
 {
-    (void)frame;
+    static long dump_at = -2;
+    if (dump_at == -2) {
+        const char *e = getenv("ETM_DUMP_BINDINGS");
+        dump_at = e ? atol(e) : -1;
+    }
+    if ((long)frame == dump_at) {                   /* (debug: the key bindings 0x97f840..) */
+        char line[2048];
+        int n = 0;
+        for (uint32_t a = 0x97f844; a < 0x97f9a4; a += 8)
+            n += snprintf(line + n, sizeof line - n, " %x:%d,%d", a & 0xfff, (int32_t)R32(a), (int32_t)R32(a + 4));
+        LOG(LOG_ALWAYS, "bindings at frame %lu:%s mode %d", frame, line, (int32_t)R32(0x947f08));
+    }
     extern void mss_frame(void);
     mss_frame();
 }
