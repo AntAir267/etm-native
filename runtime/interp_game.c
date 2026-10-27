@@ -40,11 +40,58 @@ void interp_game_update(void)
    What is blended is its output, the skinning matrices handed to the vertex shader: each
    character's last two poses (as of consecutive updates, by the state counter) by the frame's
    blend. A root bone moving over interp_jump, or a bone count change (level of detail), draws
-   the latest. */
+   the latest. Held props likewise (their world matrices, from the same pose). */
 #define STATE_COUNTER    0x97ec4cu  /* updates since the level began */
 typedef struct { uint32_t ch, n; uint32_t stamp; int have_prev; float *prev, *cur; } Skin;
 #define MAXSKIN 64
 static Skin skins[MAXSKIN];
+
+/* a 4x4 computed at draw time from the true state (so the same on every frame between two
+   updates): blended with its value as of the previous update, put back after drawing */
+typedef struct { uint32_t addr, stamp; int have_prev; float prev[16], cur[16]; } Drawn;
+#define MAXDRAWN 512
+static Drawn drawn[MAXDRAWN];
+static void blend_drawn_mat(uint32_t addr)
+{
+    uint32_t stamp = R32(STATE_COUNTER);
+    Drawn *d = NULL, *old = &drawn[0];
+    for (int i = 0; i < MAXDRAWN && !d; i++) {
+        if (drawn[i].addr == addr)
+            d = &drawn[i];
+        else if (drawn[i].stamp < old->stamp)
+            old = &drawn[i];
+    }
+    if (!d) {
+        d = old;
+        d->addr = addr;
+        d->stamp = 0;
+    }
+    if (stamp != d->stamp) {
+        memcpy(d->prev, d->cur, sizeof d->prev);
+        d->have_prev = d->stamp && stamp == d->stamp + 1;
+        memcpy(d->cur, gptr(addr), sizeof d->cur);
+        d->stamp = stamp;
+    }
+    if (!d->have_prev)
+        return;
+    float dx = d->cur[12] - d->prev[12], dy = d->cur[13] - d->prev[13], dz = d->cur[14] - d->prev[14];
+    if (dx * dx + dy * dy + dz * dz > interp_jump * interp_jump)
+        return;
+    float u = (float)(frame_blend < 0 ? 0 : frame_blend > 1 ? 1 : frame_blend);
+    interp_keep(addr, 64);
+    float *out = (float *)gptr(addr);
+    for (int k = 0; k < 16; k++)
+        out[k] = d->prev[k] + (d->cur[k] - d->prev[k]) * u;
+}
+
+/* held props: placed at their bones by the character hook's notice 1 during the pose (charhook.c:
+   each prop of the actor's list +0x380, next +0xd0, with an anchor +0x3bc; its world matrix +0x40) */
+#define CHAR_ACTOR       0x164u
+#define ACTOR_ATTACHED   0x1a4u
+#define ACTOR_PROPS      0x380u
+#define PROP_WORLD       0x40u
+#define PROP_NEXT        0xd0u
+#define PROP_ANCHOR      0x3bcu
 
 void interp_skin(uint32_t ch, uint32_t buf, uint32_t nbones)
 {
@@ -90,4 +137,9 @@ void interp_skin(uint32_t ch, uint32_t buf, uint32_t nbones)
     float *out = (float *)gptr(buf);
     for (uint32_t k = 0; k < 16u * nbones; k++)
         out[k] = s->prev[k] + (s->cur[k] - s->prev[k]) * u;
+    uint32_t actor = R32(ch + CHAR_ACTOR);
+    if (actor && !R32(actor + ACTOR_ATTACHED))
+        for (uint32_t prop = R32(actor + ACTOR_PROPS); prop; prop = R32(prop + PROP_NEXT))
+            if (R32(prop + PROP_ANCHOR))
+                blend_drawn_mat(prop + PROP_WORLD);
 }
