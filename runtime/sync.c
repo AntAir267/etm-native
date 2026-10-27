@@ -524,7 +524,11 @@ API(KERNEL32, SetThreadPriority, 2)
 API(KERNEL32, Sleep, 1)
 {
     uint32_t ms = ARG(0);
+    extern void time_caller(CPU *c, const char *what);
+    time_caller(c, ms ? "Sleep" : "Sleep(0)");
     if (deterministic) {                /* (time is the virtual clock's: a turn for the others) */
+        extern void vclock_sleep(double ms);
+        vclock_sleep(ms);
         det_yield();
         return 0;
     }

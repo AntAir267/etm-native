@@ -69,9 +69,29 @@ the same relocations when it maps the file (runtime/main.c load_module).
   flight.
 - --test runs: the turn-taking scheduler reuses a finished thread's place (the movie player
   starts threads for each movie; it ran out of its 8 places on the third movie).
+- --test runs: a Sleep on the main thread moves the virtual clock (Sleep(0) 0.1 ms). The game's
+  frame wait reads QueryPerformanceCounter (0x677a90) and calls Sleep(0) (0x7c0b40, through the
+  service table 0x97edd0) until the frame's time has passed [verified: ETM_TIME_CALLERS counts,
+  4.9 M of each in 300 frames]; with only the 1 us a read it spun ~16,000 times a frame (test
+  runs at ~10 fps). Now 300 frames take 1.4 s instead of 29 s with the same virtual times.
+  ETM_TIME_CALLERS=1 prints the clock reads and sleeps by caller at exit.
+- Miles: a sample played to its end keeps its position at the end: the movie player
+  (0x7be3fb) times frames from its sound (0x7bddcb: AIL_sample_ms_position, current == total
+  means over, then one frame a draw) [verified: decompile; the 1.5 s transition movie trans1,
+  whose sound is 1.0 s, stopped at frame 0 of the sound and the front end stayed black].
+- Movie sound (.adx beside each .avi) is not CRI ADX: the game reads it with AIL_file_read and
+  plays it as IMA ADPCM stereo (trans1.adx: 49,680 bytes = 44,850 frames at 44.1 kHz).
 
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/etm12.py; first translator run; Miles
   stand-in, ReadFileEx; first runs: the intro movies (Atari, Warner Bros., Shiny) play through
   the translated DivX decoder and the game reaches its front end (language menu drawn
   correctly, menu background movies) in a hidden --test run (work/testuser).
+- 2026-10-26: test runs 20x faster; front end complete: language, title menu (Load, New Game,
+  Options, Hacking, Quit), difficulty, the opening cinematic (Escape skips), character select,
+  Ghost's jack-in construct scene, the in-engine intro (B1_PO_01_G_EXTERIOR_START), the save
+  prompt (Saved\Save written to the user folder), then gameplay in B1_PO_02_G_LOBBY: Ghost,
+  HUD, tutorial tips, a guard fighting him; all drawn correctly at 640x480. Scripted route
+  (frames, from a fresh test user): 1200 RETURN (English), 1400 DOWN, 1430 RETURN (New Game),
+  1700 RETURN (Normal), 2000 ESCAPE (skip the cinematic), 2200 RETURN (Ghost), 3200 RETURN
+  (skip the intro scene), 4000 RETURN (save: Yes), 4300/4600 RETURN; in the lobby by ~4700.

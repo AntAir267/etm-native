@@ -154,9 +154,14 @@ class Image:
         (a relocation marks a real address: text never has one)"""
         out = set()
         self.reloc_pointers = set()
+        self.reloc_sites = set()
         for m in self.modules:
             p = m.pe
+            relocs = relocations(p)
+            self.reloc_sites.update(relocs)
             for s in p.sections:
+                if relocs:
+                    break           # relocated: those mark every real address, the scan is not needed
                 if s['flags'] & CODE or s['name'] in ('.rsrc', '.reloc'):
                     continue
                 n = min(s['vsize'], s['rsize']) if s['vsize'] else s['rsize']
@@ -164,7 +169,7 @@ class Image:
                     v = struct.unpack_from('<I', p.image, s['va'] + off)[0]
                     if self.in_text(v):
                         out.add(v)
-            for a in relocations(p):
+            for a in relocs:
                 v = p.u32(a)
                 if not self.in_text(v):
                     continue

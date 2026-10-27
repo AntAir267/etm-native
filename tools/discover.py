@@ -125,7 +125,9 @@ class Discovery:
             if m == 'neg' and p.ops[0][0] == 'r' and _same_reg(p.ops[0][1], want):
                 negated = not negated
                 continue
-            if m == 'cmp' and p.ops[0][0] == 'r' and _same_reg(p.ops[0][1], want) and p.ops[1][0] == 'i':
+            if m == 'cmp' and p.ops[1][0] == 'i' and (
+                    (p.ops[0][0] == 'r' and _same_reg(p.ops[0][1], want)) or
+                    (p.ops[0][0] == 'm' and _mem_key(p.ops[0]) == want)):
                 # reached through `jb`/`jl` (below the value: one fewer case) or the usual `ja` to
                 # the default (up to and including it)
                 n = p.ops[1][1] + (0 if via in ('jb', 'jl') else 1)
@@ -139,10 +141,23 @@ class Discovery:
                     count = max(idxs) + 1
                     return table, count, self._read_table(table, count), 'byte table %x[%d]' % (byte_tab, n)
                 return table, n, self._read_table(table, n), 'cmp'
+            # a store to the local we track (unoptimised code keeps the switch value in its frame):
+            # the value came from the stored register
+            if isinstance(want, tuple):
+                if p.ops and p.ops[0][0] == 'm' and _mem_key(p.ops[0]) == want and m not in ('cmp', 'test'):
+                    if m == 'mov' and p.ops[1][0] == 'r':
+                        want = p.ops[1][1]
+                        continue
+                    break
+                continue
             # anything else writing the register we track ends the search
             if p.ops and p.ops[0][0] == 'r' and _same_reg(p.ops[0][1], want) and m not in ('cmp', 'test'):
                 if m in ('mov', 'movzx', 'movsx') and p.ops[1][0] == 'r':
                     want = p.ops[1][1]
+                    continue
+                if m in ('mov', 'movzx', 'movsx') and p.ops[1][0] == 'm' and p.ops[1][1] == 4 and \
+                        p.ops[1][4] is None and p.ops[1][3] in ('ebp', 'esp'):
+                    want = _mem_key(p.ops[1])     # loaded from a local: follow the local
                     continue
                 if m in ('add', 'sub', 'dec', 'inc', 'and', 'xor'):
                     if m in ('and',) and p.ops[1][0] == 'i':
@@ -254,8 +269,13 @@ class Discovery:
             # code addresses used as immediates (callbacks, handlers; also MSVC's branch-free
             # selects like `neg; sbb; not; and reg, offset func`)
             if m not in ('call', 'jmp') and m not in COND_JUMPS:
+                sites = getattr(self.pe, 'reloc_sites', None)
                 for op in i.ops:
                     if op[0] == 'i' and op[2] == 4 and dec.in_text(op[1]):
+                        # a relocated program: only an immediate the relocations mark is an address
+                        if sites and not any(k in sites and self.pe.u32(k) == op[1]
+                                             for k in range(a + 1, i.next - 3)):
+                            continue
                         f.code_imms.add(op[1])
             for s in succ:
                 if s != entry and s in known:
@@ -395,10 +415,17 @@ class Discovery:
         return set(funcs) - returns
 
 
+def _mem_key(op):
+    """a memory operand as a comparable key (base, index, scale, displacement)"""
+    return ('m', op[3], op[4], op[5], op[6])
+
+
 def _same_reg(a, b):
     fam = {'eax': 'a', 'ax': 'a', 'al': 'a', 'ah': 'a', 'ebx': 'b', 'bx': 'b', 'bl': 'b', 'bh': 'b',
            'ecx': 'c', 'cx': 'c', 'cl': 'c', 'ch': 'c', 'edx': 'd', 'dx': 'd', 'dl': 'd', 'dh': 'd',
            'esi': 'si', 'si': 'si', 'edi': 'di', 'di': 'di', 'ebp': 'bp', 'bp': 'bp', 'esp': 'sp'}
+    if isinstance(a, tuple) or isinstance(b, tuple):
+        return False
     return fam.get(a, a) == fam.get(b, b)
 
 

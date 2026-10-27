@@ -12,7 +12,36 @@
 extern void set_current_cpu(CPU *c);
 
 /* ------------------------------------------------------------------ time */
-API(WINMM, timeGetTime, 0) { return (uint32_t)(int64_t)now_ms(); }
+/* ETM_TIME_CALLERS=1: count the clock reads and sleeps by caller, printed at exit (finding
+   busy-waits that make --test runs slow) */
+void time_caller(CPU *c, const char *what)
+{
+    static int on = -1;
+    static struct { uint32_t ret; const char *what; unsigned long n; } tab[256];
+    static int ntab;
+    static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;
+    if (on < 0)
+        on = getenv("ETM_TIME_CALLERS") != NULL;
+    if (!on)
+        return;
+    pthread_mutex_lock(&lk);
+    if (!c) {
+        for (int i = 0; i < ntab; i++)
+            LOG(LOG_ALWAYS, "time caller %08x %s: %lu", tab[i].ret, tab[i].what, tab[i].n);
+    } else {
+        uint32_t ret = R32(c->esp);
+        int i = 0;
+        while (i < ntab && (tab[i].ret != ret || tab[i].what != what))
+            i++;
+        if (i == ntab && ntab < 256)
+            tab[ntab++] = (typeof(tab[0])){ret, what, 0};
+        if (i < 256)
+            tab[i].n++;
+    }
+    pthread_mutex_unlock(&lk);
+}
+
+API(WINMM, timeGetTime, 0) { time_caller(c, "timeGetTime"); return (uint32_t)(int64_t)now_ms(); }
 API(WINMM, timeBeginPeriod, 1) { return 0; }
 API(WINMM, timeEndPeriod, 1) { return 0; }
 

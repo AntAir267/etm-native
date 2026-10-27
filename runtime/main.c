@@ -49,6 +49,15 @@ static double real_ms(void)
     return (t.tv_sec - t_start.tv_sec) * 1000.0 + (t.tv_nsec - t_start.tv_nsec) / 1e6;
 }
 
+/* --test: a sleep on the main thread moves the virtual clock (Sleep(0) 0.1 ms), so the game's
+   wait-for-the-next-frame loops (read the clock, Sleep(0), again) end in a few hundred turns
+   instead of tens of thousands of 1 us reads */
+void vclock_sleep(double ms)
+{
+    if (deterministic && current_cpu() == main_cpu)
+        vclock += ms > 0 ? ms : 0.1;
+}
+
 double now_ms(void)
 {
     if (deterministic) {
@@ -491,6 +500,8 @@ static __attribute__((unused)) void on_signal(int sig, siginfo_t *si, void *uc)
 void process_exit(int code)
 {
     LOG(LOG_ALWAYS, "program exited with code %d", code);
+    extern void time_caller(CPU *c, const char *what);
+    time_caller(NULL, NULL);
     settings_save();
     if (logfp)
         fflush(logfp);

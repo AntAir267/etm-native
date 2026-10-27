@@ -45,6 +45,7 @@ typedef struct Obj {
     int kind, used;
     uint32_t handle;                    /* the program's handle */
     int voice;                          /* runtime voice, -1 none */
+    int ended;                          /* played to its end: the position stays at the end */
     int16_t *decoded;                   /* ADPCM decoded for the voice (owned) */
     uint32_t dec_frames;
     int status;
@@ -276,12 +277,15 @@ static void start(Obj *o)
     apply_gain(o);
     voice_play(o->voice, o->loops);
     o->status = SMP_PLAYING;
+    o->ended = 0;
 }
 
 static int status_of(Obj *o)
 {
-    if (o->status == SMP_PLAYING && (o->voice < 0 || !voice_playing(o->voice, NULL)))
+    if (o->status == SMP_PLAYING && (o->voice < 0 || !voice_playing(o->voice, NULL))) {
         o->status = SMP_DONE;
+        o->ended = 1;
+    }
     return o->status;
 }
 
@@ -307,6 +311,7 @@ static void end(Obj *o)
 {
     free_voice(o);
     o->status = SMP_DONE;
+    o->ended = 0;
 }
 
 static void release(Obj *o)
@@ -316,14 +321,18 @@ static void release(Obj *o)
     W32(o->handle, 0);
 }
 
-/* frames played so far (in the data's own frames) */
+static uint32_t total_frames(const Obj *o);
+
+/* frames played so far (in the data's own frames). A sample played to its end stays at its end:
+   the movie player takes current == total as "the sound is over" (0x7bddcb) [verified: Ghidra
+   decompile; with 0 after the end the 1.5 s transition movie, whose sound is 1.0 s, never ended] */
 static uint32_t played_frames(Obj *o)
 {
     uint32_t pos = 0;
     if (o->voice >= 0 && status_of(o) != SMP_DONE)
         voice_playing(o->voice, &pos);
-    else if (o->status == SMP_DONE && o->voice < 0)
-        return 0;
+    else if (o->ended)
+        return total_frames(o);
     return pos;
 }
 
@@ -408,6 +417,7 @@ AIL(init_sample, 4)
     if (o) {
         free_voice(o);
         o->status = SMP_DONE;
+        o->ended = 0;
         o->addr = o->len = 0;
         o->type = DIG_F_16BITS;
         o->block = 0;
@@ -422,7 +432,7 @@ AIL(init_sample, 4)
 AIL(set_sample_address, 12)
 {
     Obj *o = obj_get(ARG(0), K_SAMPLE);
-    if (o) { o->addr = ARG(1); o->len = ARG(2); }
+    if (o) { o->addr = ARG(1); o->len = ARG(2); o->ended = 0; }
     return 0;
 }
 /* (sample, format, flags) */

@@ -132,6 +132,8 @@ API(KERNEL32, GetTickCount, 0)
 {
     if (tick_hook)
         tick_hook(c, R32(c->esp));
+    extern void time_caller(CPU *c, const char *what);
+    time_caller(c, "GetTickCount");
     return (uint32_t)(uint64_t)now_ms();
 }
 
@@ -144,6 +146,8 @@ API(KERNEL32, QueryPerformanceFrequency, 1)
 
 API(KERNEL32, QueryPerformanceCounter, 1)
 {
+    extern void time_caller(CPU *c, const char *what);
+    time_caller(c, "QueryPerformanceCounter");
     uint64_t v = (uint64_t)(now_ms() * 10000.0);
     W32(ARG(0), (uint32_t)v);
     W32(ARG(0) + 4, (uint32_t)(v >> 32));
