@@ -179,6 +179,29 @@ take 3.7 s of CPU instead of a core at full load.
   the input update's own test) A also presses Enter and B Escape: the game's joystick accept is
   button 2 (RT).
 
+### 9. The drawing code's rewrite (Ant, 2026-10-26: "why don't we do a full drawing code rewrite here?")
+For frame-rate interpolation (7b) and later graphics work, the drawing code is rewritten as
+readable C (runtime/decomp/), as larush-native did, instead of replaying recorded Direct3D streams
+(considered first: generic, but it has to match draws between frames by guesswork and leaves
+anything drawn from rewritten buffers at 60).
+- Where the drawing is [verified: tools/calltree.sh 6465c8 6800 on the lobby route]: each frame
+  (0x6465c8 -> 0x646e8b) first draws, per view, the state the last updates left: 0x747b66 (the
+  world: 449 draws in the lobby frame), 0x6f309c -> 0x6f2732 -> 0x7b0aa8 -> 0x7b1838 -> 0x7b1808
+  (objects and characters: 941 draws), 0x6ea603 (68), 0x646c33, 0x646cec, 0x646c9e; then runs the
+  updates due, the last one also preparing the next view (frustum 0x62bf7a, projection 0x62a236,
+  0x649f80...). That render pass is 115 functions, ~24,000 instructions in the lobby frame
+  (builds/decomp_funcs.txt); other situations (driving, hovercraft, cutscenes, Focus, sniper) will
+  add more.
+- Tooling (from larush-native, ported): decomp.h (DECOMP registry, game_call family, dc_frame,
+  decomp_ret), decomp.c (option decomp, ETM_DECOMP_OFF), tests/ab.sh (the lobby route twice,
+  rewrites off and on, memory and draw hashes every 10 frames; the translation's run saved and
+  reused), tools/disfn.py (instructions with stub targets), tools/calltree.sh, tools/decomp_status.py,
+  runtime/watch.c (ETM_WATCH write watchpoint), runtime/decomp/stackfix.c (frames cleared in both
+  modes where the original copies stack leftovers: 0x64a2e9 found by the first A/B), HOWTO.md and
+  BRIEF.md for helpers in worktrees (tools/worktree_init.sh).
+- Batches: world (0x747b66, 0x6ea603, 0x646c33's and 0x6f309c's small subtrees), characters
+  (0x6d0f2d's subtree), object submission (0x6f309c, 0x6f2732, 0x7b0aa8, 0x6f3ec5).
+
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/etm12.py; first translator run; Miles
   stand-in, ReadFileEx; first runs: the intro movies (Atari, Warner Bros., Shiny) play through
@@ -203,3 +226,5 @@ take 3.7 s of CPU instead of a core at full load.
 - 2026-10-26: private GitHub repo AntAir267/etm-native (Ant's request); HUD at the corners in
   play; cinematics across the screen; in-engine scenes fill the screen with their framing; EAX
   reverb; the frame wait sleeps. The Hacking menu needs a saved game (not tested yet).
+- 2026-10-26: drawing-code rewrite started: tooling, 3 render-pass functions (renderpass.c), the
+  first stack fix; tests/ab.sh same over 691 checkpoints.

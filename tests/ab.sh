@@ -4,17 +4,21 @@
 # Office lobby) runs twice, rewrites off and on, hidden, each writing its memory hash and the
 # draw-stream hash every few frames (--hash), and the two are compared. Prints "same" or the first
 # frame that differs.
-#   tests/ab.sh [--frames N] [--every N] [--out DIR] [--route NAME] [-- extra etm arguments]
+#   tests/ab.sh [--frames N] [--every N] [--out DIR] [--route NAME] [--fresh] [-- extra etm arguments]
+# The translation's run (rewrites off) depends only on the translation and the runtime outside
+# runtime/decomp/: it is saved (work/ab/hash_a.txt with its build id) and reused while the same
+# translation is built; --fresh runs it again.
 # Routes: lobby (default: menus, the cinematic skipped, the jack-in and intro scenes, the lobby fight)
 set -e
 cd "$(dirname "$0")/.."
-frames=6910 every=10 out=work/ab route=lobby extra=()
+frames=6910 every=10 out=work/ab route=lobby extra=() fresh=0
 while [ $# -gt 0 ]; do
     case "$1" in
     --frames) frames=$2; shift 2 ;;
     --every) every=$2; shift 2 ;;
     --out) out=$2; shift 2 ;;
     --route) route=$2; shift 2 ;;
+    --fresh) fresh=1; shift ;;
     --) shift; extra=("$@"); break ;;
     *) echo "unknown argument $1"; exit 2 ;;
     esac
@@ -30,11 +34,18 @@ run() {    # run <a|b> <ETM_DECOMP_OFF value or empty>
     ETM_KEYS="$keys" ETM_DECOMP_OFF="$2" timeout -s KILL 900 ./build/etm --test --user "$u" --hidden \
         --frames "$frames" --hash "$out/hash_$1.txt" --hash-every "$every" "${extra[@]}" > "$out/log_$1.txt" 2>&1 || true
 }
-run a all &
-pa=$!
-run b "" &
-pb=$!
-wait $pa $pb
+# the translation's identity: the generated code and the runtime outside runtime/decomp/
+id=$( (cat gen/funcs.h; cat runtime/*.c runtime/*.h; echo "$route $frames $every ${extra[*]}") | sha1sum | cut -c1-16)
+if [ $fresh = 0 ] && [ -s "$out/hash_a.txt" ] && [ "$(cat "$out/hash_a.id" 2>/dev/null)" = "$id" ]; then
+    run b ""
+else
+    run a all &
+    pa=$!
+    run b "" &
+    pb=$!
+    wait $pa $pb
+    echo "$id" > "$out/hash_a.id"
+fi
 if ! [ -s "$out/hash_a.txt" ] || ! [ -s "$out/hash_b.txt" ]; then
     echo "no hashes (see $out/log_a.txt, $out/log_b.txt)"; exit 1
 fi
