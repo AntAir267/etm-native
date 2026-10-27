@@ -67,11 +67,14 @@ static SDL_Gamepad *pad_of_slot[MAXPADS];
 
 static int rumble_on = 1;            /* Enhanced option "rumble" */
 
+/* the game's one joystick is every controller merged (pad.c): its rumble goes to all of them */
 static void rumble(int slot, uint16_t low, uint16_t high, uint32_t ms)
 {
-    if (!rumble_on || slot < 0 || slot >= MAXPADS || !pad_of_slot[slot])
+    if (!rumble_on || slot < 0)
         return;
-    SDL_RumbleGamepad(pad_of_slot[slot], low, high, ms == 0xffffffffu ? 0xffffffffu : ms);
+    for (int i = 0; i < MAXPADS; i++)
+        if (pad_of_slot[i])
+            SDL_RumbleGamepad(pad_of_slot[i], low, high, ms == 0xffffffffu ? 0xffffffffu : ms);
 }
 
 /* ------------------------------------------------------------------ controllers (pad.c) */
@@ -198,6 +201,18 @@ void host_window_title(const char *title)
    pixels is the desktop size. The window is then the game's own (host_window_create keeps it). */
 static int desk_w, desk_h;
 
+/* the desktop size in pixels of the screen a window is on (0 if unknown) */
+static int screen_of_window(int *w, int *h)
+{
+    SDL_DisplayID d = SDL_GetDisplayForWindow(window);
+    const SDL_DisplayMode *m = d ? SDL_GetDesktopDisplayMode(d) : NULL;
+    if (!m)
+        return 0;
+    *w = (int)lroundf(m->w * m->pixel_density);
+    *h = (int)lroundf(m->h * m->pixel_density);
+    return 1;
+}
+
 static void desktop_probe(void)
 {
     if (window && !fullscreen) {        /* already made, in a window: the first screen SDL lists */
@@ -220,8 +235,28 @@ static void desktop_probe(void)
     if (!hidden_window)
         SDL_ShowWindow(window);
 measure:
-    SDL_SyncWindow(window);
-    SDL_GetWindowSizeInPixels(window, &desk_w, &desk_h);
+    /* full screen takes effect when the compositor says so: until the window has the size of the
+       screen it is on, its own size can still show (on Wayland at 2x scaling the 1280x720 probe
+       measured 2560x1440 pixels, and the game drew 16:9 on a 2560x1600 panel, stretched
+       [verified: Ant's GPD Win Max 2 with two more screens, 2026-10-27]); so up to a second is
+       waited for that, then the screen's desktop size is taken whatever the window says */
+    {
+        int sw = 0, sh = 0;
+        for (int i = 0; i < 60; i++) {
+            SDL_PumpEvents();
+            SDL_SyncWindow(window);
+            SDL_GetWindowSizeInPixels(window, &desk_w, &desk_h);
+            if (!fullscreen || (screen_of_window(&sw, &sh) && desk_w == sw && desk_h == sh))
+                break;
+            SDL_Delay(16);
+        }
+        if (fullscreen && screen_of_window(&sw, &sh) && (desk_w != sw || desk_h != sh)) {
+            LOG(LOG_ALWAYS, "screen: the full-screen window is %dx%d, its screen %dx%d: the screen's taken",
+                desk_w, desk_h, sw, sh);
+            desk_w = sw;
+            desk_h = sh;
+        }
+    }
     LOG(LOG_WIN, "screen: %dx%d pixels (%s, density %.2f)", desk_w, desk_h,
         fullscreen ? "full screen" : "maximized", SDL_GetWindowPixelDensity(window));
 fallback:

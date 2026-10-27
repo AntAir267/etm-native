@@ -82,6 +82,8 @@ extern int game_driving(void);
 /* the front end (menus) as against play: game.c */
 extern int game_front_end(void);
 static int front_end(void) { return game_front_end(); }
+/* an in-engine cut scene (game.c: the cinema bars are up) */
+extern int game_cutscene(void);
 
 
 static int clamp16(double v) { return v < -32768 ? -32768 : v > 32767 ? 32767 : (int)lround(v); }
@@ -90,45 +92,81 @@ static int last_controller;             /* the device used last was a controller
 void input_used(int controller) { last_controller = controller != 0; }
 int input_controller_last(void) { return last_controller; }
 
+/* ONE JOYSTICK FOR THE GAME: the game reads the first joystick it finds, so every controller is
+   merged into one (buttons held on any, each stick from the controller pushing it furthest, rumble
+   on all). Several devices for one controller are common: a handheld's own pad, its daemon's
+   virtual one and the raw one it hides (the GPD Win Max 2 shows "Generic X-Box pad", "Microsoft
+   X-Box 360 pad" and "Handheld Daemon Controller", some silent: the game read a silent one and its
+   sticks and buttons did nothing [verified: Ant's run, 2026-10-27; /proc/bus/input/devices]).
+   pads[] holds each controller; game_joy is the game's joystick. */
+static int game_joy = -1;
+int pad_game_joystick(void) { return game_joy; }
+
 /* Plugging a controller in counts as using it (the prompts switch to it); unplugging the last
    one hands them back to the keyboard. */
 int pad_attach(const char *id, const char *name)
 {
-    int slot = input_joy_attach(id, name, 6, 16, 1);
+    int slot = -1;
+    pthread_mutex_lock(&pad_lock);
+    for (int s = 0; s < INPUT_MAX_JOYS && slot < 0; s++)
+        if (!pads[s].connected)
+            slot = s;
+    if (slot >= 0) {
+        memset(&pads[slot], 0, sizeof pads[slot]);
+        pads[slot].connected = 1;
+    }
+    pthread_mutex_unlock(&pad_lock);
     if (slot < 0)
         return -1;
-    input_joy_set_ff(slot, ifc_rumble_wanted());    /* the game plays force feedback as rumble */
-    pthread_mutex_lock(&pad_lock);
-    memset(&pads[slot], 0, sizeof pads[slot]);
-    pads[slot].connected = 1;
-    pthread_mutex_unlock(&pad_lock);
+    (void)id;
+    if (game_joy < 0) {
+        game_joy = input_joy_attach("controllers", name, 6, 16, 1);
+        if (game_joy >= 0)
+            input_joy_set_ff(game_joy, ifc_rumble_wanted());    /* the game plays force feedback as rumble */
+    }
     input_used(1);
     return slot;
 }
 
+static void send_all(void);
 void pad_detach(int slot)
 {
     if (slot < 0 || slot >= INPUT_MAX_JOYS)
         return;
-    input_joy_disconnect(slot);
     pthread_mutex_lock(&pad_lock);
     memset(&pads[slot], 0, sizeof pads[slot]);
     pthread_mutex_unlock(&pad_lock);
-    if (!pad_count())
+    if (!pad_count()) {
+        if (game_joy >= 0)
+            input_joy_disconnect(game_joy);
+        game_joy = -1;
         input_used(0);
+    } else {
+        send_all();                 /* (what the unplugged one held lets go) */
+    }
 }
 
-
-/* the X axis: the left stick, or the D-pad at full lock while the stick rests */
-static void steer(int slot)
+/* the left stick (round dead zone; full output at LEFT_FULL of its travel) on X / Y, from the
+   controller pushing it furthest */
+static void steer(void)
 {
-    Pad *p = &pads[slot];
-    int x = p->axis[PAD_LX], y = p->axis[PAD_LY];
-    double full = LEFT_FULL * 32767;
-    double r = hypot(x, y), k = r > stick_dead ? (r - stick_dead) / (full - stick_dead) * 32767 / r : 0;
-    int sx = clamp16(x * k), sy = clamp16(y * k);
-    input_joy_axis(slot, INPUT_AXIS_X, sx);
-    input_joy_axis(slot, INPUT_AXIS_Y, sy);
+    double full = LEFT_FULL * 32767, best = -1;
+    int sx = 0, sy = 0;
+    pthread_mutex_lock(&pad_lock);
+    for (int s = 0; s < INPUT_MAX_JOYS; s++) {
+        if (!pads[s].connected || s == split_slot)
+            continue;
+        int x = pads[s].axis[PAD_LX], y = pads[s].axis[PAD_LY];
+        double r = hypot(x, y), k = r > stick_dead ? (r - stick_dead) / (full - stick_dead) * 32767 / r : 0;
+        if (r > best) {
+            best = r;
+            sx = clamp16(x * k);
+            sy = clamp16(y * k);
+        }
+    }
+    pthread_mutex_unlock(&pad_lock);
+    input_joy_axis(game_joy, INPUT_AXIS_X, sx);
+    input_joy_axis(game_joy, INPUT_AXIS_Y, sy);
 }
 
 /* the left stick's X for the car's steering (game.c): -1 .. 1 past the round dead zone, the
@@ -150,14 +188,85 @@ double pad_steer(void)
 }
 
 /* the right stick (round dead zone, the rest stretched over the range): across on RotZ, up and
-   down on Z */
-static void right_stick(int slot)
+   down on Z; from the controller pushing it furthest */
+static void right_stick(void)
 {
-    Pad *p = &pads[slot];
-    int x = p->axis[PAD_RX], y = p->axis[PAD_RY];
-    double r = hypot(x, y), k = r > stick_dead ? (r - stick_dead) / (32767 - stick_dead) * 32767 / r : 0;
-    input_joy_axis(slot, INPUT_AXIS_RZ, clamp16(x * k));
-    input_joy_axis(slot, INPUT_AXIS_Z, clamp16(y * k));
+    double best = -1;
+    int sx = 0, sy = 0;
+    pthread_mutex_lock(&pad_lock);
+    for (int s = 0; s < INPUT_MAX_JOYS; s++) {
+        if (!pads[s].connected || s == split_slot)
+            continue;
+        int x = pads[s].axis[PAD_RX], y = pads[s].axis[PAD_RY];
+        double r = hypot(x, y), k = r > stick_dead ? (r - stick_dead) / (32767 - stick_dead) * 32767 / r : 0;
+        if (r > best) {
+            best = r;
+            sx = clamp16(x * k);
+            sy = clamp16(y * k);
+        }
+    }
+    pthread_mutex_unlock(&pad_lock);
+    input_joy_axis(game_joy, INPUT_AXIS_RZ, sx);
+    input_joy_axis(game_joy, INPUT_AXIS_Z, sy);
+}
+
+/* a button held on any controller (player 2's apart) */
+static int held_any(int button)
+{
+    int r = 0;
+    pthread_mutex_lock(&pad_lock);
+    for (int s = 0; s < INPUT_MAX_JOYS; s++)
+        r |= pads[s].connected && s != split_slot && pads[s].button[button];
+    pthread_mutex_unlock(&pad_lock);
+    return r;
+}
+
+static int trigger_any(int axis)
+{
+    int r = 0;
+    pthread_mutex_lock(&pad_lock);
+    for (int s = 0; s < INPUT_MAX_JOYS; s++)
+        r |= pads[s].connected && s != split_slot && pads[s].axis[axis] > TRIGGER_DOWN;
+    pthread_mutex_unlock(&pad_lock);
+    return r;
+}
+
+/* the D-pad as the hat, from the D-pad buttons held on any controller */
+static void send_pov(void)
+{
+    int u = held_any(PAD_DUP), d = held_any(PAD_DDOWN), lf = held_any(PAD_DLEFT), rg = held_any(PAD_DRIGHT);
+    int v = INPUT_POV_CENTERED;
+    if (u && rg) v = 4500; else if (rg && d) v = 13500;
+    else if (d && lf) v = 22500; else if (lf && u) v = 31500;
+    else if (u) v = 0; else if (rg) v = 9000; else if (d) v = 18000; else if (lf) v = 27000;
+    input_joy_pov(game_joy, 0, v);
+}
+
+/* the Escape key while Start is held on any controller */
+static void send_start(void)
+{
+    static int sent;
+    int h = held_any(PAD_START);
+    if (h != sent) {
+        sent = h;
+        input_key(DIK_ESCAPE, h);
+    }
+}
+
+/* everything again (a controller unplugged) */
+static void send_all(void)
+{
+    if (game_joy < 0)
+        return;
+    steer();
+    right_stick();
+    input_joy_button(game_joy, JOY_RT, trigger_any(PAD_RT));
+    input_joy_button(game_joy, JOY_LT, trigger_any(PAD_LT));
+    for (int b = 0; b < PAD_BUTTONS; b++)
+        if (joy_button(b) >= 0)
+            input_joy_button(game_joy, joy_button(b), held_any(b));
+    send_pov();
+    send_start();
 }
 
 void pad_axis(int slot, int axis, int value)
@@ -165,24 +274,21 @@ void pad_axis(int slot, int axis, int value)
     if (slot < 0 || slot >= INPUT_MAX_JOYS || axis < 0 || axis >= PAD_AXES)
         return;
     pthread_mutex_lock(&pad_lock);
-    Pad *p = &pads[slot];
-    p->axis[axis] = value;
-    int lt = p->axis[PAD_LT], rt = p->axis[PAD_RT];
+    pads[slot].axis[axis] = value;
     pthread_mutex_unlock(&pad_lock);
-    if (slot == split_slot)
+    if (slot == split_slot || game_joy < 0)
         return;
     if (abs(value) > 12000)
         input_used(1);
-    (void)lt; (void)rt;
     if (axis == PAD_LT || axis == PAD_RT) {
-        input_joy_button(slot, axis == PAD_RT ? JOY_RT : JOY_LT, value > TRIGGER_DOWN);
+        input_joy_button(game_joy, axis == PAD_RT ? JOY_RT : JOY_LT, trigger_any(axis));
         return;
     }
     if (axis == PAD_LX || axis == PAD_LY) {
-        steer(slot);
+        steer();
         return;
     }
-    right_stick(slot);
+    right_stick();
 }
 
 void pad_button(int slot, int button, int down)
@@ -194,22 +300,20 @@ void pad_button(int slot, int button, int down)
         video_skip_press();             /* (any button skips an intro video: video.c) */
     }
     pthread_mutex_lock(&pad_lock);
-    Pad *p = &pads[slot];
-    p->button[button] = down != 0;
-    int up = p->button[PAD_DUP], dn = p->button[PAD_DDOWN], l = p->button[PAD_DLEFT], r = p->button[PAD_DRIGHT];
+    pads[slot].button[button] = down != 0;
     pthread_mutex_unlock(&pad_lock);
-    if (slot == split_slot)
+    if (slot == split_slot || game_joy < 0)
         return;
-    (void)up; (void)dn; (void)l; (void)r;
-    if (button == PAD_START) {                  /* the Escape key: the game's pause menu */
-        input_key(DIK_ESCAPE, down);
+    if (button == PAD_START) {                  /* the Escape key: the game's pause menu, skips films */
+        send_start();
         return;
     }
-    /* in menus A is Enter and B Escape too (the button pressed is the one released) */
+    /* in menus A is Enter and B Escape too, and in cut scenes A is Enter (it skips them); the
+       button pressed is the one released */
     if (button == PAD_A || button == PAD_B) {
         static uint8_t keyed[INPUT_MAX_JOYS][2];
         int k = button == PAD_B, dik = k ? DIK_ESCAPE : DIK_RETURN;
-        if (down && front_end()) {
+        if (down && (front_end() || (!k && game_cutscene()))) {
             keyed[slot][k] = 1;
             input_key(dik, 1);
         } else if (!down && keyed[slot][k]) {
@@ -218,19 +322,12 @@ void pad_button(int slot, int button, int down)
         }
     }
     if (button >= PAD_DUP && button <= PAD_DRIGHT) {
-        pthread_mutex_lock(&pad_lock);
-        int u = p->button[PAD_DUP], d = p->button[PAD_DDOWN], lf = p->button[PAD_DLEFT], rg = p->button[PAD_DRIGHT];
-        pthread_mutex_unlock(&pad_lock);
-        int v = INPUT_POV_CENTERED;
-        if (u && rg) v = 4500; else if (rg && d) v = 13500;
-        else if (d && lf) v = 22500; else if (lf && u) v = 31500;
-        else if (u) v = 0; else if (rg) v = 9000; else if (d) v = 18000; else if (lf) v = 27000;
-        input_joy_pov(slot, 0, v);
+        send_pov();
         return;
     }
     int jb = joy_button(button);
     if (jb >= 0)
-        input_joy_button(slot, jb, down);
+        input_joy_button(game_joy, jb, held_any(button));
 }
 
 int pad_held(int button)
