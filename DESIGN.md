@@ -106,8 +106,26 @@ the same relocations when it maps the file (runtime/main.c load_module).
   0x7a73db, x times [0x97eda0] = width / 640, y times height / 448. Before each replay the
   command list is laid out for a centred 4:3 area (x scale height / 480); what spans the design
   width (fades, the cutscenes' letterbox bars) spans the screen. The movie picture (0x7be3fb) is
-  pillarboxed through d3d9.c's screen-space draw hook (ui2d_layout). The HUD sits in the 4:3
-  area for now (corner anchoring needs a play/menu state: to do). Command formats in game.c.
+  pillarboxed through d3d9.c's screen-space draw hook (ui2d_layout). Command formats in game.c.
+- hud (corners by default; center): in play (game_front_end() false) the blit items are grouped
+  (a text line is many glyph items: same row, each starting near the last one's end) and each
+  group is anchored to the left edge, the centre or the right edge by its extent, so the HUD
+  keeps the 4:3 layout's distance from the screen's edges. Menus, the pause menu included, stay
+  centred (their left-aligned labels would split otherwise); the dimmed HUD behind the pause menu
+  moves into the 4:3 area while paused.
+- movies (fill by default; fit): the story's cinematics (movies\fmv\*.avi, films letterboxed
+  about 2.5:1 inside the 640 x 448 picture [verified: frame dump]) are drawn across the screen's
+  width, their own bars covering the top and bottom; the other movies (logos, menu backdrops,
+  character select, with 4:3 menus laid over them) stay pillarboxed. Which movie plays comes from
+  the last .avi opened (files.c file_open_notify).
+- cutscenes (fill by default; bars): in cinema mode [0x97f238] is the bars' height in pixels (an
+  eighth of the screen), the 3D is drawn into the band between (viewport, and the projection
+  0x62a236 gets the band's height) and 0x6023cf draws 58-high 2D bars [verified: decompiles,
+  values at run time]. The band on 4:3 is about 16:9, the scenes' framing. On a wide screen the
+  viewport becomes the screen (d3d9.c SetViewport -> ui_viewport), the projection gets the
+  screen's height and a focal length times s = min(screen / band, (w / h) / (4/3)), and the 2D
+  bars shrink to (1 - s x band / screen) / 2: none at 16:9, slim at 16:10 [verified: frames at
+  1920x1080 and 2560x1600].
 - d3d9.c: larush-native's game-specific changes removed (fog distances from a LA Rush address,
   hemispheric ambient constants, UI squeezing keyed to LA Rush state, shader substitution on by
   default, shadow filter); the calls reach DXVK as the game makes them. ETM_LOG_2D=1 logs every
@@ -120,6 +138,32 @@ next simulation step [verified: decompile]. So it runs at up to 60 a second (the
 rate); the PC version's reputation for unsteady frame rates is frames straddling 1/60. The repack
 capped it at 30 (dxwrapper LimitPerFrameFPS). Default: the game's own pacing; frame_limit = 30
 gives the repack's cap.
+
+### 7b. Why the frame rate stays at 60 (uncapping)
+The simulation is a fixed 60 Hz step: each drawn frame runs the updates due (0x6469f1 counts them
+from the measured rate with a fractional carry; 0x646e8b loops over them) and draws once, on the
+last update [verified: decompiles]. Nothing is blended between updates, and with 0 updates due
+nothing is drawn; above 60 drawn frames each update would show twice, and stepping faster would
+speed the whole game up (cutscene frame counters, timers count updates). Drawing above 60 needs
+blending between updates for everything that moves (larush-native's render_rate, interp_game.c):
+a project of its own, not started.
+
+### 7c. Sound: EAX reverb
+The game picks EAX 3 (its provider attribute check "EAX3 room LF") and, on area changes, hands
+"EAX all parameters" the address of a pointer to one of its EAX 3 listener presets (0x9437b8
+Generic, 0x943a58, ...: environment, size, diffusion, room, room HF/LF, decay time, HF/LF
+ratios, reflections and delay, reverb and delay, ...) [verified: values at run time]; every 3D
+sample gets "EAX sample reverb mix" -1 (by distance); 2D samples (music, menus) get none.
+dsound.c has a reverb send bus: Freeverb's network (8 combs, 4 allpasses a channel) with the
+combs' feedback from the decay time, damping from the HF ratio, pre-delay reflections + reverb
+delay, level from room + reverb (mB) [verified: offline impulse response follows the decay time
+at low and mid frequencies]. 3D samples send their mixed signal (send 1); AIL_set_sample_reverb_
+levels sets a 2D sample's send.
+
+### 7d. The frame wait sleeps
+The frame end's wait (0x7c0915) spun on QueryPerformanceCounter + Sleep(0); that Sleep(0) (call
+site 0x7c0b4a) now sleeps 0.2 ms a turn (sync.c sleep0_spin_site): 40 s of intros and menus
+take 3.7 s of CPU instead of a core at full load.
 
 ### 8. Controllers (pad.c, game.c)
 - The game's own joystick support [verified: decompiles 0x7b4b78, 0x7b53c2, 0x7b8470 and the
@@ -156,3 +200,6 @@ gives the repack's cap.
   ~/.local/share/etm-native/options.txt starts at display = fullscreen, resolution = desktop.
 - 2026-10-26: controllers: the Xbox layout through the game's own joystick bindings; the whole
   front end and into the lobby with the scripted controller only [verified: frames].
+- 2026-10-26: private GitHub repo AntAir267/etm-native (Ant's request); HUD at the corners in
+  play; cinematics across the screen; in-engine scenes fill the screen with their framing; EAX
+  reverb; the frame wait sleeps. The Hacking menu needs a saved game (not tested yet).
