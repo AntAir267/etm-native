@@ -141,6 +141,10 @@ static const char *const help[][2] = {
     {"anisotropic", "anisotropic: 16, 8, 4, 2 or off (texture filtering)"},
     {"hud", "hud: corners (the default: on wide screens the HUD sits at the screen's edges, as far from them as on a 4:3 "
             "screen) or center (in the centred 4:3 area); with ui = center"},
+    {"movies", "movies: fill (the default: the story's cinematics, films letterboxed in their 4:3 picture, drawn across a wide "
+               "screen) or fit (every movie pillarboxed in 4:3)"},
+    {"cutscenes", "cutscenes: fill (the default: the in-engine scenes, framed for about 16:9 inside black bars, fill a wide "
+                  "screen with their original framing) or bars (the game's bars over the wider view)"},
     {"ui", "ui: center (the default: menus, text, HUD and movies keep their 4:3 shape on wide screens, fades and "
            "bars still fill the screen) or stretch (the game's own)"},
     {NULL, NULL}};

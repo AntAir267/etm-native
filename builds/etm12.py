@@ -32,6 +32,9 @@ HOOKS = {
     # the 2D renderer (the blit command list at [0x92ed64], [0x979bcc] bytes, replayed once a
     # frame: menus, text, HUD): game.c lays the list out for the screen's shape first
     0x7a73db: 'blit_draw',
+    # the projection matrix made (m, width, height, focal, far, aspect factor) and handed to the
+    # device (0x7a2df4): game.c zooms in-engine scenes on wide screens
+    0x62a236: 'projection',
 }
 
 CONSTS = {}

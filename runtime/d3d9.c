@@ -674,6 +674,19 @@ HOSTFN(sp_IDirect3DDevice9_DrawPrimitive, 4)
    stretched to the width); ETM_LOG_2D=1 logs each such draw. */
 static uint32_t cur_fvf;               /* 0 while a vertex declaration is in use */
 
+/* the viewport, as game.c may want it (the in-engine scenes' band widened to the screen) */
+extern void ui_viewport(uint32_t *x, uint32_t *y, uint32_t *w, uint32_t *h);
+HOSTFN(sp_IDirect3DDevice9_SetViewport, 2)
+{
+    void *self = d3d_host(ARG(0));
+    D3DVIEWPORT9 vp;
+    memcpy(&vp, gptr(ARG(1)), sizeof vp);
+    uint32_t x = vp.X, y = vp.Y, w = vp.Width, h = vp.Height;
+    ui_viewport(&x, &y, &w, &h);
+    vp.X = x; vp.Y = y; vp.Width = w; vp.Height = h;
+    return (uint32_t)((HRESULT (*)(void *, const D3DVIEWPORT9 *))VT(self)[47])(self, &vp);
+}
+
 HOSTFN(sp_IDirect3DDevice9_SetFVF, 2)
 {
     void *self = d3d_host(ARG(0));
@@ -688,7 +701,8 @@ HOSTFN(sp_IDirect3DDevice9_SetVertexDeclaration, 2)
     return (uint32_t)((HRESULT (*)(void *, void *))VT(self)[87])(self, (void *)d3d_host_or_null(ARG(1)));
 }
 
-extern int ui2d_layout(uint32_t caller, float minx, float maxx, float miny, float maxy, float *scale, float *offset);
+extern int ui2d_layout(uint32_t caller, float minx, float maxx, float miny, float maxy, float *scale, float *offset,
+                       float *yscale, float *yoffset);
 
 static uint32_t prim_vertices(uint32_t prim, uint32_t count)
 {
@@ -719,8 +733,8 @@ static const void *ui2d_vertices(CPU *c, uint32_t data, uint32_t nv, uint32_t st
         if (v[1] > maxy) maxy = v[1];
     }
     uint32_t caller = R32(c->esp);
-    float sc = 1, off = 0;
-    int t = ui2d_layout(caller, minx, maxx, miny, maxy, &sc, &off);
+    float sc = 1, off = 0, ysc = 1, yoff = 0;
+    int t = ui2d_layout(caller, minx, maxx, miny, maxy, &sc, &off, &ysc, &yoff);
     if (log2d)
         LOG(LOG_ALWAYS, "2d: frame %lu caller %08x fvf %x %u vertices x %.1f..%.1f y %.1f..%.1f%s", frame_count, caller,
             cur_fvf, nv, minx, maxx, miny, maxy, t ? " (laid out)" : "");
@@ -736,6 +750,7 @@ static const void *ui2d_vertices(CPU *c, uint32_t data, uint32_t nv, uint32_t st
     for (uint32_t i = 0; i < nv; i++) {
         float *v = (float *)(buf + i * stride);
         v[0] = v[0] * sc + off;
+        v[1] = v[1] * ysc + yoff;
     }
     return buf;
 }

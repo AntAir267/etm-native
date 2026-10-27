@@ -256,16 +256,20 @@ static int intro_skipped(const char *name)
     if (!on || !name) return 0;
     const char *b = strrchr(name, '\\');
     b = b ? b + 1 : name;
-    static const char *const intro[] = {"rushlogo.bik", "midway.bik", "pitbull.bik", "gamestar.bik", "bink.bik", "legal.bik"};
+    static const char *const intro[] = {"atari.avi", "wb.avi", "shiny.avi", "bandai.avi"};
     for (size_t i = 0; i < sizeof intro / sizeof *intro; i++)
         if (!strcasecmp(b, intro[i]))
             return 1;
     return 0;
 }
 
+void (*file_open_notify)(const char *winpath);     /* (game.c: which movie plays) */
+
 API(KERNEL32, CreateFileA, 7)
 {
     const char *name = gstr(ARG(0));
+    if (file_open_notify && name)
+        file_open_notify(name);
     if (intro_skipped(name)) {
         LOG(LOG_FILE, "CreateFileA(\"%s\"): skipped (skip_intro)", name);
         set_last_error(2);

@@ -31,6 +31,7 @@ SPECIAL = {
     'IDirect3DDevice9::DrawPrimitive', 'IDirect3DDevice9::SetRenderState',
     'IDirect3DDevice9::DrawPrimitiveUP', 'IDirect3DDevice9::DrawIndexedPrimitiveUP',
     'IDirect3DDevice9::SetFVF', 'IDirect3DDevice9::SetVertexDeclaration',
+    'IDirect3DDevice9::SetViewport',
     'IDirect3DDevice9::SetRenderTarget', 'IDirect3DDevice9::GetRenderTarget',
     'IDirect3DDevice9::SetDepthStencilSurface', 'IDirect3DDevice9::GetDepthStencilSurface',
     'IDirect3DDevice9::SetTexture', 'IDirect3DDevice9::Clear',

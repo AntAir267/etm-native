@@ -1,5 +1,6 @@
 /* What the shared runtime asks of the game-specific side. Enter the Matrix plays its movies
    through the DivX DLLs (translated with it) and has no game-specific controller handling yet. */
+#include <ctype.h>
 #include <math.h>
 #include <string.h>
 #include <strings.h>
@@ -88,6 +89,50 @@ static int ui_active(void)
     ui_s = h / 480.0f;
     ui_off_px = (w - 640.0f * ui_s) / 2;
     return 1;
+}
+
+/* IN-ENGINE SCENES (option cutscenes = fill, the default; ui = center). In cinema mode the
+   camera state's [0x97f238] holds the bars' height in pixels (an eighth of the screen's: 135 at
+   1080), the 3D is drawn into the band between them (viewport y = bars, height = screen - 2
+   bars; the projection 0x62a236 gets that height) and 0x6023cf draws black 2D bars 58 high at
+   the top and bottom of the 448-line design [verified: decompiles; projection arguments and the
+   view state read at run time]. The band on a 4:3 screen is about 16:9: the shape the scenes
+   were framed for. On a wide screen the band is shown at the screen's size: the viewport and
+   the projection's height become the screen's and its focal length grows by s, so the picture
+   keeps the band's framing:
+     s = min(screen / band height, (width / height) / (4/3))
+   (16:9: s = 4/3, the band's height exactly, no bars; 16:10: s = 1.2 keeps the band's width and
+   slim bars cover the rest, (1 - s x band / screen) / 2 each). Culling keeps the game's own
+   frustum (wider than what shows). cutscenes = bars: the game's bars over the wider view. */
+static int cutscenes_fill = -1;
+static float cinema_s, cinema_bar;     /* (this frame's) focal factor, and each bar's share */
+
+static int cinema_on(void)
+{
+    if (cutscenes_fill < 0)
+        cutscenes_fill = strcasecmp(option_str("cutscenes", "fill"), "bars") != 0;
+    int32_t bar = (int32_t)R32(0x97f238);
+    float w = (float)(int32_t)R32(0x947f60), h = (float)(int32_t)R32(0x947f64);
+    if (!cutscenes_fill || !ui_active() || bar <= 0 || bar * 4 >= h)
+        return 0;
+    float band = h - 2 * (float)bar;
+    float s1 = h / band, s2 = (w / h) / (4.0f / 3.0f);
+    cinema_s = s1 < s2 ? s1 : s2;
+    cinema_bar = (1 - cinema_s * band / h) / 2;
+    if (cinema_bar < 0.004f)
+        cinema_bar = 0;
+    return 1;
+}
+
+void ui_viewport(uint32_t *x, uint32_t *y, uint32_t *w, uint32_t *h)
+{
+    if (!cinema_on())
+        return;
+    uint32_t sw = R32(0x947f60), sh = R32(0x947f64), bar = R32(0x97f238);
+    if (*x == 0 && *y == bar && *w == sw && *h == sh - 2 * bar) {
+        *y = 0;
+        *h = sh;
+    }
 }
 
 static uint16_t rd16g(uint32_t a) { return R16(a); }
@@ -230,6 +275,43 @@ static void blit_layout(void)
             an = ANCHOR_CENTER;
         ganchor[g] = an;
     }
+    static int log_blit = -1;
+    if (log_blit < 0)
+        log_blit = getenv("ETM_LOG_BLIT") != NULL;
+    if (log_blit)
+        for (int g = 0; g < ngroups; g++)
+            if (ganchor[g] == ANCHOR_FULL)
+                for (int k = 0; k < ni; k++)
+                    if (items[k].group == g)
+                        LOG(LOG_ALWAYS, "blit: frame %lu full-width op %u x %.0f..%.0f y %.0f..%.0f", frame_count,
+                            items[k].op, items[k].x0, items[k].x1, items[k].y0, items[k].y1);
+    /* the in-engine scenes' bars (op 2 at x 0, y 0 or 392, then op 7 641 x 58) shrink to what the
+       zoomed picture leaves */
+    if (cinema_on()) {
+        float bar = cinema_bar * 448;
+        int32_t bh = bar < 0.5f ? 0 : (int32_t)lroundf(bar);
+        for (uint32_t i = 0; i + 22 <= n; ) {
+            uint32_t a = base + i;
+            uint8_t op = R8(a);
+            if (op == 2 && R8(a + 9) == 7 && rd16g(a + 1) == 0 && (int32_t)R32(a + 9 + 5) >= 640 &&
+                (int32_t)R32(a + 9 + 9) == 58) {
+                uint16_t y = rd16g(a + 3);
+                if (y == 0 || y == 392) {
+                    if (y == 392)
+                        wr16g(a + 3, (uint16_t)(448 - bh));
+                    W32(a + 9 + 9, (uint32_t)(bh ? bh + (y == 392 ? 2 : 0) : 0));
+                }
+            }
+            switch (op) {
+            case 2: i += 9; break;
+            case 7: i += 13; break;
+            case 12: i += 16; break;
+            case 13: i += 49; break;
+            case 3: case 4: case 5: case 8: i += 5; break;
+            default: i += 1; break;
+            }
+        }
+    }
     /* 3: the new positions */
     for (int k = 0; k < ni; k++) {
         BlitItem *it = &items[k];
@@ -287,20 +369,75 @@ static int hook_blit_draw_fn(CPU *c)
     return 1;
 }
 
-/* (d3d9.c asks for each screen-space draw: 1 with a scale and offset for x, 0 to draw as is) */
-int ui2d_layout(uint32_t caller, float minx, float maxx, float miny, float maxy, float *scale, float *offset)
+/* CINEMATICS (option movies = fill, the default; ui = center): the story's movies
+   (movies\fmv\*.avi) are films letterboxed inside their 640 x 448 picture (g01_s: rows 112-367
+   of the 480-line screen, about 2.5:1 [verified: frame dump]). On a wide screen they are drawn
+   across its whole width, centred: the picture grows by the screen's shape over 4:3 and its own
+   black bars still cover the top and bottom (a 4:3 picture would lose 12 % at each; the films'
+   bars are wider than that). The other movies (logos, menu backdrops, character select, whose
+   menus are laid over them in 4:3) are pillarboxed. movies = fit pillarboxes all. */
+static int movie_fmv, movies_fill = -1;
+
+static void movie_opened(const char *win)
+{
+    size_t n = strlen(win);
+    if (n < 4 || strcasecmp(win + n - 4, ".avi"))
+        return;
+    char low[512];
+    snprintf(low, sizeof low, "%s", win);
+    for (char *p = low; *p; p++)
+        *p = (char)tolower((unsigned char)*p);
+    movie_fmv = strstr(low, "\\fmv\\") != NULL;
+}
+
+/* (d3d9.c asks for each screen-space draw: 1 with a scale and offset for x and y, 0 to draw as is) */
+int ui2d_layout(uint32_t caller, float minx, float maxx, float miny, float maxy, float *scale, float *offset,
+                float *yscale, float *yoffset)
 {
     (void)minx; (void)maxx; (void)miny; (void)maxy;
-    /* the movie picture (0x7be3fb draws it with x times [0x97eda0]): pillarboxed */
+    /* the movie picture (0x7be3fb draws it with x times [0x97eda0]): pillarboxed, or across the
+       screen (the films) */
     if (caller >= 0x7be3fb && caller < 0x7beb44 && ui_active()) {
         float st;
         uint32_t v = R32(0x97eda0);
         memcpy(&st, &v, 4);
         if (st <= 0)
             return 0;
+        if (movies_fill < 0)
+            movies_fill = strcasecmp(option_str("movies", "fill"), "fit") != 0;
+        if (movie_fmv && movies_fill) {
+            float h = (float)(int32_t)R32(0x947f64), k = st / ui_s;    /* (width / 640) / (height / 480) */
+            *scale = 1;
+            *offset = 0;
+            *yscale = k;
+            *yoffset = h / 2 * (1 - k);
+            return 1;
+        }
         *scale = ui_s / st;
         *offset = ui_off_px;
         return 1;
+    }
+    return 0;
+}
+
+/* (m, width, height, focal, far, aspect factor) */
+static int hook_projection_fn(CPU *c)
+{
+    static int log = -1;
+    if (log < 0)
+        log = getenv("ETM_LOG_PROJ") != NULL;
+    float a[5];
+    for (int k = 0; k < 5; k++) { uint32_t v = R32(c->esp + 8 + 4 * k); memcpy(&a[k], &v, 4); }
+    if (log)
+        LOG(LOG_ALWAYS, "projection: frame %lu w %.0f h %.0f focal %.1f far %.0f k %.3f bars %d", frame_count,
+            a[0], a[1], a[2], a[3], a[4], (int32_t)R32(0x97f238));
+    /* the band (its height the screen's less the bars) shown at the screen's height */
+    float sh = (float)(int32_t)R32(0x947f64), bar = (float)(int32_t)R32(0x97f238);
+    if (cinema_on() && fabsf(a[1] - (sh - 2 * bar)) < 1.5f) {
+        float nh = sh, nf = a[2] * cinema_s;
+        uint32_t v;
+        memcpy(&v, &nh, 4); W32(c->esp + 12, v);
+        memcpy(&v, &nf, 4); W32(c->esp + 16, v);
     }
     return 0;
 }
@@ -323,6 +460,9 @@ void game_init(void)
     resolution_choose();
     hook_settings_load = hook_settings_load_fn;
     hook_blit_draw = hook_blit_draw_fn;
+    hook_projection = hook_projection_fn;
+    extern void (*file_open_notify)(const char *winpath);
+    file_open_notify = movie_opened;
 }
 
 void game_frame(unsigned long frame)
