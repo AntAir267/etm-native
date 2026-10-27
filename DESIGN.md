@@ -263,6 +263,16 @@ anything drawn from rewritten buffers at 60).
   shader-constant staging, memcpy'd by 0x7ae788 in 0x7b1808: render scratch). After the input fix
   and the world step once per update, the input counter, the lighting buffers and 0x6e9415's
   counter match too.
+- Rewrite status (2026-10-27): 100 functions in (world 32, characters 43, object submission 20,
+  render pass 3, frame 2), tests/ab.sh same. Written but left to the translation
+  (DECOMP_PENDING, objsubmit.h): 0x6f309c (the object pass), 0x6f2732 (an actor prepared: lights,
+  level of detail, pose), 0x7b0aa8 (the actor drawer), 0x7b1838 (one model pass), 0x6f3ec5 (the
+  light set), 0x7b1808 (the parts: CPU skinning into the dynamic vertex buffer) - with them in,
+  the lobby route's first SetLight (frame 2283) differs in the last bit: the translation's
+  compiled code narrows some x87 operations to SSE (rounding to nearest) and keeps others on the
+  x87 (the game's rounding down), per site; objsubmit.h's f32 forces the x87 where needed.
+  Characters are skinned on the CPU (0x7b1808, world matrix identity), so interp_skin's blended
+  matrices reach the vertices.
 - Not yet: objects placed by matrices (the object submission batch will name them), particles,
   held props (placed by the character hook's notice 1 at draw time: they move at the update
   rate until blended like the skins). Open (translation fidelity, not this work): the game's x87
