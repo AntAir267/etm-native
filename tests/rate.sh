@@ -1,7 +1,8 @@
 #!/bin/bash
-# Gameplay at another drawn rate (DESIGN.md 9b): the lobby route (tests/ab.sh's keys) at the game's
-# own 60 (a) and with frames drawn between updates at a virtual RATE a second (b: frame_rate =
-# uncapped); scripted keys, checkpoints and dumps fall on the same updates (main.c sched()). The
+# Gameplay at another drawn rate (DESIGN.md 9b): the lobby route (tests/ab.sh's keys) with the
+# virtual clock at RATE frames a second, paced by the game itself (a: frame_rate = 60, frames
+# waiting for 1/60 s, so menus and movies run as in b) and with frames drawn between updates (b:
+# frame_rate = uncapped); scripted keys, checkpoints and dumps fall on the same updates (main.c sched()). The
 # game's state must match at each checkpoint: compares the memory hashes, or with --dump TICK the
 # memory at that update (tools/memdiff.py), which shows what differs.
 #   tests/rate.sh [--rate N] [--frames N] [--every N] [--dump TICK] [--out DIR]
@@ -30,7 +31,7 @@ run() {    # run <a|b> <fps> <frame_rate>
     ETM_KEYS="$keys" ETM_TEST_FPS="$2" timeout -s KILL 1200 ./build/etm --test --user "$u" --hidden \
         --frames "$frames" --hash "$out/hash_$1.txt" --hash-every "$every" "${d[@]}" > "$out/log_$1.txt" 2>&1 || true
 }
-run a 60 60 &
+run a "$rate" 60 &
 pa=$!
 run b "$rate" uncapped &
 pb=$!

@@ -68,7 +68,7 @@
 #define UPDATE_COUNT     0x6469f1u
 #define WORLD_DRAW       0x747b66u  /* (world) */
 #define OBJECTS_DRAW     0x6f309cu  /* (0) objects and characters */
-#define LEVEL_DRAW       0x646c33u  /* (level): renderpass.c */
+#define ARROW_PASS       0x646c33u  /* (level): the arrow between state hooks (renderpass.c) */
 #define PLACED_DRAW      0x646cecu  /* renderpass.c */
 #define ACTOR_EXTRAS_DRAW 0x646c9eu /* renderpass.c */
 #define VIEW_FOV         0x62b547u  /* (fov, view, mode arg) */
@@ -353,7 +353,7 @@ static int dc_646e8b(CPU *c)
             game_call(c, OBJECTS_DRAW, 1, 0);
             c->eax = MODE_TABLE;
             game_call(c, R32(MODE_TABLE + 0xcc), 1, VIEW);
-            game_call(c, LEVEL_DRAW, 1, level);
+            game_call(c, ARROW_PASS, 1, level);
             if (R32(R32(GAME) + 0x1b4)) {
                 game_call(c, PLACED_DRAW, 0);
                 game_call(c, ACTOR_EXTRAS_DRAW, 0);

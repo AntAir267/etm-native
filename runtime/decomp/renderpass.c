@@ -24,20 +24,22 @@ static int dc_646c9e(CPU *c)
 }
 DECOMP(646c9e, dc_646c9e);
 
-#define HOOK_BEFORE      0x97ee78u  /* the service table's (cdecl, two arguments) hooks round the */
-#define HOOK_AROUND      0x97ee98u  /* drawing of a view: before (0, 0), around ((0, 0) then (1, 1)), */
-#define HOOK_AFTER       0x97ee7cu  /* after (0, 0); each may be 0 [verified: 0x646c33] */
-#define VIEW_DRAW        0x5fef62u  /* (view, 0): the view's scene [guess: from its use here] */
+#define HOOK_BEFORE      0x97ee78u  /* service table slots (cdecl, two arguments), each may be 0: */
+#define HOOK_AROUND      0x97ee98u  /* +0xf0 0x7ac018 the state before the objects, +0x110 0x7c1317 */
+#define HOOK_AFTER       0x97ee7cu  /* depth test/write (0, 0) off then (1, 1) on, +0xf4 0x7ab9e8 the
+                                       state after [verified: the table's filler 0x7c0f3c, world helper] */
+#define ARROW_DRAW       0x5fef62u  /* (level, 0): a model placed in front of the camera, turned to a
+                                       target [guess: the objective arrow] (arrow.c) */
 
-/* 0x646c33 (view): the view's scene (0x5fef62) between the service table's optional hooks. */
+/* 0x646c33 (level): the arrow (0x5fef62) with depth off, between the state hooks. */
 static int dc_646c33(CPU *c)
 {
-    uint32_t e = c->esp, view = ARG(0);
+    uint32_t e = c->esp, level = ARG(0);
     if (R32(HOOK_BEFORE))
         game_call(c, R32(HOOK_BEFORE), 2, 0, 0);
     if (R32(HOOK_AROUND))
         game_call(c, R32(HOOK_AROUND), 2, 0, 0);
-    game_call(c, VIEW_DRAW, 2, view, 0);
+    game_call(c, ARROW_DRAW, 2, level, 0);
     if (R32(HOOK_AROUND))
         game_call(c, R32(HOOK_AROUND), 2, 1, 1);
     if (R32(HOOK_AFTER))
@@ -62,8 +64,8 @@ DECOMP(646c33, dc_646c33);
 #define VEC_BY_MATRIX    0x41f470u  /* (this = vec3; matrix) */
 #define MAT_INIT         0x47f630u  /* (this = 4x4 record, 0x44 bytes) */
 #define MAT_FROM         0x41f400u  /* (this = record; matrix) */
-#define MAT_WITH_VEC     0x41f450u  /* (this = record; vec3) -> an object for MAT_FINISH */
-#define MAT_FINISH       0x41f100u  /* (this = what MAT_WITH_VEC returned) */
+#define MAT_TRANSLATION  0x41f450u  /* (this = 4x4) -> its translation, this + 0x30 */
+#define VEC3_COPY        0x41f100u  /* (this = destination; source) [verified: ret 4, world helper] */
 #define DRAWER_PLACE     0x7528e5u  /* (this = drawer; vec3, 1) */
 #define DRAWER_DRAW      0x7530e1u  /* (this = drawer; record, 0x8000000) */
 
@@ -77,8 +79,8 @@ static void placed(CPU *c, uint32_t obj, uint32_t pos, uint32_t d1, uint32_t d2)
     game_callm(c, VEC_BY_MATRIX, v, 1, R32(obj) + OBJ_MATRIX);
     game_callm(c, MAT_INIT, rec, 0);
     game_callm(c, MAT_FROM, rec, 1, R32(obj) + OBJ_MATRIX);
-    uint32_t r = game_callm(c, MAT_WITH_VEC, rec, 1, v);
-    game_callm(c, MAT_FINISH, r, 0);
+    uint32_t r = game_callm(c, MAT_TRANSLATION, rec, 0);
+    game_callm(c, VEC3_COPY, r, 1, v);                   /* the record placed at the position */
     if (R32(d1)) {
         game_callm(c, DRAWER_PLACE, R32(d1), 2, v, 1);
         game_callm(c, DRAWER_DRAW, R32(d1), 2, rec, 0x8000000);
