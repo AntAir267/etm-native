@@ -42,8 +42,14 @@ the same relocations when it maps the file (runtime/main.c load_module).
 - First translator run: 9,460 functions (Matrix.exe 8,405; DivxMediaLib 237, DivxDecoder 527,
   FileParser 291), 1.2 M instructions, ~80 s, 2.4 GB.
 - 3DNow! code (femms, pfmul, pfadd at 0x8406f8, 0x84103c...) cannot be translated: those
-  functions stop with a message. The game only takes them when CPUID reports 3DNow!, which the
-  runtime's CPUID never does (Pentium III) [guess: check the game's CPUID test].
+  functions stop with a message. The maths dispatcher 0x823a48 installs them only when the CPU
+  check 0x823964 reports 3DNow! (bits 0x20 and 0x80), which the runtime's CPUID never does
+  (Pentium III); its SSE set (bit 0x40) is translated [verified: decompile].
+- Ghidra cross-check (REA, 2026-10-26): Ghidra has 13,612 functions in Matrix.exe's code, we
+  13,289. Of Ghidra's 1,910 we lack, 1,705 aren't covered by our code at all: 1,515 are targets
+  of incremental-linking stubs that nothing reachable calls (dead code the linker kept) and the
+  only references from live code are the 19 3DNow! routines above [verified: work/disc_cover.py,
+  relocation and call scans].
 - 3,188 jump tables found by scan without a bound [guess: MSVC 7 switch pattern the bound
   finder misses; to check against Ghidra].
 
@@ -107,7 +113,15 @@ the same relocations when it maps the file (runtime/main.c load_module).
   default, shadow filter); the calls reach DXVK as the game makes them. ETM_LOG_2D=1 logs every
   screen-space draw with its caller and extent.
 
-### 7. Controllers (pad.c, game.c)
+### 7. Frame pacing
+The game paces itself (0x7c0915, at each frame's end): the frame's time is rounded up to 1/60,
+1/30, 1/20, 1/15 or 1/12 s, waited out with QueryPerformanceCounter and Sleep(0), and used as the
+next simulation step [verified: decompile]. So it runs at up to 60 a second (the Xbox version's
+rate); the PC version's reputation for unsteady frame rates is frames straddling 1/60. The repack
+capped it at 30 (dxwrapper LimitPerFrameFPS). Default: the game's own pacing; frame_limit = 30
+gives the repack's cap.
+
+### 8. Controllers (pad.c, game.c)
 - The game's own joystick support [verified: decompiles 0x7b4b78, 0x7b53c2, 0x7b8470 and the
   binding table read at run time]: DIJOYSTATE2; X/Y move, RotZ strafes, the D-pad works menus;
   buttons 1-12 and the D-pad's directions are copied to +0x250 of the input object (0x e7c018)
@@ -137,5 +151,8 @@ the same relocations when it maps the file (runtime/main.c load_module).
 - 2026-10-26: resolution and widescreen: desktop size by default, Hor+ 3D, 2D kept 4:3 and
   centred, full-width fades and bars, pillarboxed movies [verified: 1080p frames of the title,
   a cinematic, character select, the in-engine intro and the lobby].
+- 2026-10-26: sound checked (a recording of the mix: each intro's sound for its file's length);
+  installed to ~/.local/opt/etm-native with an applications-menu entry (Enter the Matrix);
+  ~/.local/share/etm-native/options.txt starts at display = fullscreen, resolution = desktop.
 - 2026-10-26: controllers: the Xbox layout through the game's own joystick bindings; the whole
   front end and into the lobby with the scripted controller only [verified: frames].

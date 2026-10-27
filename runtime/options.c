@@ -135,7 +135,7 @@ static const char *const help[][2] = {
     {"vsync", "vsync: on (frames wait for the screen) or off"},
     {"antialiasing", "antialiasing: off, 2x, 4x or 8x (multisampling)"},
     {"rumble", "rumble: on or off (controller vibration)"},
-    {"frame_limit", "frame_limit: off, screen (3 under the screen's refresh, for G-Sync / FreeSync) or a rate"},
+    {"frame_limit", "frame_limit: off (the game's own pacing: up to 60 a second, the Xbox version's rate), screen (3 under the screen's refresh) or a rate (30 = the repack's cap)"},
     {"resolution", "resolution: desktop (the default: the screen's size), original (MatrixConfig.ini's RESOLUTION, "
                    "0-6 = 640x480 .. 2048x1536) or WxH"},
     {"anisotropic", "anisotropic: 16, 8, 4, 2 or off (texture filtering)"},
