@@ -16,6 +16,7 @@ static Field fields[MAXF];
 static int nfields;
 static unsigned long step_no;
 static int applied;
+int interp_active(void) { return applied; }
 float interp_jump = 50.0f;                       /* a move longer than this in a step is a jump */
 float interp_turn = 0;
 
@@ -144,11 +145,34 @@ void interp_apply(double t)
     }
 }
 
+/* memory a blended frame's drawing overwrites (blended outputs written in place): saved now, put
+   back after drawing, after the fields */
+typedef struct { uint32_t addr, n; size_t at; } Keep;
+static Keep keeps[256];
+static int nkeeps;
+static char *keepbuf;
+static size_t keepused, keepcap;
+void interp_keep(uint32_t addr, uint32_t n)
+{
+    if (!applied || nkeeps == 256) return;
+    if (keepused + n > keepcap) {
+        keepcap = (keepused + n) * 2;
+        keepbuf = realloc(keepbuf, keepcap);
+    }
+    memcpy(keepbuf + keepused, gptr(addr), n);
+    keeps[nkeeps++] = (Keep){addr, n, keepused};
+    keepused += n;
+}
+
 /* after drawing: the latest step's values back */
 void interp_restore(void)
 {
     if (!applied) return;
     applied = 0;
+    for (int i = nkeeps - 1; i >= 0; i--)
+        memcpy(gptr(keeps[i].addr), keepbuf + keeps[i].at, keeps[i].n);
+    nkeeps = 0;
+    keepused = 0;
     for (int i = 0; i < nfields; i++) {
         Field *f = &fields[i];
         if (f->step == step_no)

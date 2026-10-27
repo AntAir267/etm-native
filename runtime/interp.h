@@ -21,6 +21,12 @@ extern float interp_jump;                       /* game units a step that count 
 extern float interp_turn;                       /* a matrix element changing more than this in a step:
                                                    a jump (a cut to another angle), 0 = not checked */
 
+int interp_active(void);                        /* a blended frame is being drawn */
+void interp_keep(uint32_t addr, uint32_t n);    /* memory saved now, put back after drawing */
+
 /* interp_game.c: this game's fields, after each update (frame.c) */
 void interp_game_update(void);
 extern double frame_blend;
+/* a character's skinning matrices as just posed (skin.c, at draw time, from the true state):
+   blended with the previous update's when a blended frame is drawn */
+void interp_skin(uint32_t character, uint32_t buf, uint32_t nbones);

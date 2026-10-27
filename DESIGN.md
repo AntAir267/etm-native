@@ -252,6 +252,22 @@ anything drawn from rewritten buffers at 60).
   (0x5f648c, called per poll: fixed by skipping the poll), the world's per-frame dynamic lighting
   (0x7a44a0 from 0x7475c8, alternating per frame: double-buffered vertex light records
   [guess]), and the projection kept by the render pass (+0x94: the last mesh's far plane).
+- Interpolated so far: the camera (each view's view matrix +0x240, view x projection +0xd4,
+  frustum planes +0x114, position +0x2d4, one group: a cut in any draws all at the latest;
+  position over 300 units or a view-matrix element over 0.5 in an update is a cut) and the
+  characters (interp_skin from skin.c: the pose code runs from the true state on every frame, as
+  it writes game state; its output, the skinning matrices, is blended between the last two
+  updates' poses for drawing and put back after). Checked (tests/rate.sh with ETM_LOG_CAMERA at
+  120): the drawn camera advances evenly every frame, every other frame on the 60 run's position;
+  memory at update 4500 still the 60 run's apart from the list above plus 0xe816a0 (the drawing's
+  shader-constant staging, memcpy'd by 0x7ae788 in 0x7b1808: render scratch). After the input fix
+  and the world step once per update, the input counter, the lighting buffers and 0x6e9415's
+  counter match too.
+- Not yet: objects placed by matrices (the object submission batch will name them), particles,
+  held props (placed by the character hook's notice 1 at draw time: they move at the update
+  rate until blended like the skins). Open (translation fidelity, not this work): the game's x87
+  runs single precision rounding down (control word 0x047f); where GCC narrows a translated x87
+  operation to SSE it rounds to nearest (characters helper, tools/fpround.py).
 - Plan: larush-native's design (runtime/interp.c): after each update, copy the fields that place
   what is drawn (actors' positions and orientations, skeleton poses, the camera's view record,
   particles); before the render pass blend them by the frame's place between the last two

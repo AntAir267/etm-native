@@ -17,6 +17,7 @@
    Float maths as in quat.c: this function's translation keeps the x87 stack in the CPU record, so
    everything stays on the x87 (LX, V: loads through an asm barrier). */
 #include "decomp.h"
+#include "../interp.h"
 
 static inline f80 X(f80 v) { __asm__("" : "+t"(v)); return v; }
 static inline f80 LX(uint32_t a) { return X((f80)RF32(a)); }
@@ -275,6 +276,9 @@ static int dc_6d0f2d(CPU *c)
         eax = game_call(c, R32(self + CHAR_HOOK), 3, 3, self, buf);
         FPOP();
     }
+    /* frames drawn between updates: the matrices blended (interp_game.c; only while drawing a
+       blended frame, so the original's behaviour is otherwise untouched) */
+    interp_skin(self, buf, R32(R32(self + CHAR_SKELETON) + SKEL_BONES));
     return decomp_ret(c, e, eax, 2);
 }
 DECOMP(6d0f2d, dc_6d0f2d);
