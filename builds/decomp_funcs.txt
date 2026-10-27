@@ -117,3 +117,6 @@
 8aa994
 8af415
 8af445
+# The frame (DESIGN.md 9b): the in-game frame function and its update count, for the interpolation
+646e8b
+6469f1
