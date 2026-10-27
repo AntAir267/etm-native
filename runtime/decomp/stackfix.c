@@ -22,7 +22,24 @@ static void clear_frame(CPU *c, uint32_t size)
    0x6a9413 <- 0x64a2e9 <- 0x649f80, disassembly] */
 static int sf_64a2e9(CPU *c) { clear_frame(c, 0x1d0); return 0; }
 
+/* 0x8bbd20, the SSE-support test of the CPU detection (0x8bbd80, the Intel compiler's dispatch:
+   run on the first call of a CPU-specific function, 0x7b1808 on the lobby route): signal(SIGILL,
+   0x8bbd00), setjmp(0xe80780) (0x8adfdc), movaps. The jmp_buf keeps the registers and the stack
+   position of that first call (ebp at +0, esp at +0x10), which differ when the callers above are
+   rewritten; it is dead once the test has returned, so its register part (+0..+0x18: ebp, ebx,
+   edi, esi, esp, return address, SEH frame) is cleared after it in both modes [verified: A/B
+   memory diff at frame 2290 of the lobby route, 0xe80780 and 0xe80790 holding stack addresses;
+   ETM_WATCH backtrace 0x8adfdc <- 0x8bbd20 <- 0x8bbd80 <- 0x7b1808 <- 0x7b1838; disassembly] */
+#define SSE_TEST_JMPBUF  0xe80780u
+static int sf_8bbd20(CPU *c)
+{
+    F_008bbd20_orig(c);
+    memset(gptr(SSE_TEST_JMPBUF), 0, 0x1c);
+    return 1;
+}
+
 void stackfix_install(void)
 {
     hook_sf_64a2e9 = sf_64a2e9;
+    hook_sf_8bbd20 = sf_8bbd20;
 }

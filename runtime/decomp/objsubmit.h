@@ -47,6 +47,28 @@
 static inline uint32_t f2u(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 static inline float u2f(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
 
+/* x87 maths rounded to a float as the original's fstp does (the program's x87 rounding). TRAP:
+   GCC narrows (float)((long double)a op b) of two floats to an SSE mulss / addss / subss /
+   divss, which rounds by the SSE control word; the x87's and the SSE's rounding differ at times
+   in this game, so the result's last bit can differ. It does so in the translation too, per
+   site: gen's 0x627f10 compiled to subss, its 0x7b1838 kept fmul [verified: objdump of
+   F_00627f10_orig and F_007b1838_orig]. The A/B check compares with the translation, so a
+   rewrite rounds as the translation's compiled code does: the switched-in helpers keep the
+   (float) casts that narrow alike (0x627f10, 0x62981c, ...: tests/ab.sh same); f32 where the
+   translation kept the x87 (0x7b1838's light colours: the plain cast gave 0x3f3aa79c against
+   the translation's 0x3f3aa79b on the lobby route's first SetLight). */
+static inline float f32(f80 x)
+{
+    float r;
+    __asm__("fstps %0" : "=m"(r) : "t"(x) : "st");
+    return r;
+}
+
+/* A rewrite written but not switched in yet (left to the translation: tests/ab.sh still differs
+   with it, see its comment): kept compiled, not registered. Replace with DECOMP once it matches. */
+#define DECOMP_PENDING(a, f) \
+    static int (*const decomp_pending_##a)(CPU *) __attribute__((used)) = f
+
 #define MEMCPY                   0x8a9ae0u  /* the C runtime's memcpy (dst, src, n), cdecl */
 
 /* The CPU-specific copies: some functions start with a dispatch on the CPU class the game detected

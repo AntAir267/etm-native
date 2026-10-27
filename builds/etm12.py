@@ -38,6 +38,8 @@ HOOKS = {
     # stack leftovers (runtime/decomp/stackfix.c): frames cleared on entry in both modes, for the
     # bytes the original copies into game memory without writing them first
     0x64a2e9: 'sf_64a2e9',
+    # the SSE-support test (setjmp into 0xe80780 around a movaps): its saved stack position cleared
+    0x8bbd20: 'sf_8bbd20',
 }
 
 # the drawing code's functions, each hookable for its rewrite (runtime/decomp/, decomp.h DECOMP)
