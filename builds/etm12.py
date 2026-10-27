@@ -48,6 +48,14 @@ HOOKS = {
     0x7b5333: 'input_poll',
     # the SSE-support test (setjmp into 0xe80780 around a movaps): its saved stack position cleared
     0x8bbd20: 'sf_8bbd20',
+    # the front end's Options screen (runtime/menu.c, DESIGN.md "In-game options"): the Video page
+    # built (its label and value lists) and run each frame, where menu.c adds the port's settings
+    # as rows; the Controls page built, run and drawn, where it adds Vibration
+    0x660a16: 'video_setup',
+    0x6617a7: 'video_update',
+    0x66c752: 'controls_setup',
+    0x66e9bf: 'controls_update',
+    0x66eab0: 'controls_draw',
 }
 
 # the drawing code's functions, each hookable for its rewrite (runtime/decomp/, decomp.h DECOMP)

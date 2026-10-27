@@ -466,6 +466,12 @@ int game_cutscene(void)
     return (screen == 2 || screen == 3) && (int32_t)R32(0x97f238) > 0;
 }
 
+/* the in-game Options page (menu.c) changed ui, cutscenes, hud or movies: read them again */
+void game_options_reapply(void)
+{
+    ui_mode = cutscenes_fill = hud_corners = movies_fill = -1;
+}
+
 void game_init(void)
 {
     extern void decomp_install(void), stackfix_install(void);
@@ -474,6 +480,8 @@ void game_init(void)
     extern void frame_install(void);
     frame_install();                    /* frames between updates (runtime/decomp/frame.c) */
     resolution_choose();
+    extern void menu_install(void);
+    menu_install();                     /* the port's settings in the game's Options pages (menu.c) */
     hook_settings_load = hook_settings_load_fn;
     hook_blit_draw = hook_blit_draw_fn;
     hook_projection = hook_projection_fn;

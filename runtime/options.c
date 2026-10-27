@@ -1,6 +1,6 @@
 /* Enhanced options (design point 1): <user>/options.txt, "key = value" lines, # comments.
    Missing keys keep the faithful defaults. --option key=value on the command line overrides
-   the file for one run. The in-game Enhanced page (enhanced.c) edits the same file. */
+   the file for one run. The game's own Options pages (menu.c) edit the same file. */
 #include <ctype.h>
 #include <stdlib.h>
 #include <strings.h>

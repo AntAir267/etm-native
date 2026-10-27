@@ -286,6 +286,48 @@ anything drawn from rewritten buffers at 60).
   place of 0x6469f1's count), the front end staying at one update a frame. The rewrite's reports
   name the fields.
 
+### 10. The port's settings in the game's own Options pages (runtime/menu.c, 2026-10-27)
+Ant: "There are no settings in the settings menus." (GAME-GOALS.md: every setting in the game's
+own menu.) Title menu > Options > Video now has, under Subtitles: Display, Resolution, V-Sync,
+Frame Rate, Frame Limit, Anti-Aliasing, Anisotropic Filtering, HUD, Movies, Cut Scenes, Menus;
+Options > Controls has Vibration under Fighting / Driving / Hovercraft / Mouse. All drawn,
+highlighted and moved through by the game's own list code [verified: frames at 640x480 and
+1280x720, options.txt rewritten by each change].
+- How the game builds its pages [verified: disassembly; frames]: the Options screen (0x7028 bytes,
+  constructor 0x65c06a, state [+0x24] run by 0x65fc55) keeps each page's rows in list widgets
+  (+0x214 the labels, +0x2d4, +0x394 the Video page's values, 0xc0 apart): a 0x78-byte look copied
+  in by 0x5f9ca0 (x +0x30, y +0x34 on the 640 x 448 design, wrap width +0x5c, row spacing across
+  +0x64 / down +0x68), flag 0x10 (0x6574ca(2, on)) and state 0 (0x5f9ce0) for the highlight,
+  items added by 0x6554fc ({look, UTF-16 text}, the text copied), 0x657401 empties, 0x6577af
+  selects, 0x656962 draws, 0x6559be runs a list's own input. Texts: Text\TX<language>FE.bin
+  (UTF-16; dword 0, count, offsets from +8) through 0x65526b on the screen's +0x1c0 (23 Subtitles,
+  26 On, 27 Off, 28 Vibration). Menu actions 0x5f69bd(n) on [+0x994]: 0 up, 1 down, 2 left,
+  3 right, 7 back; [0x98f048] the input slot 0x10-0x13 pressed this frame (0x65c1cf), which the
+  pages take as up / right / down / left too [guess: the joystick's directions].
+- The PC's Video page (0x660a16 build, 0x6617a7 run, 0x661b8a draw): one label (the Xbox's Gamma,
+  Contrast, Brightness are looped over and not added) and On / Off across at x 300, the choice
+  going to [0x97f810] when the page is left with back. Hooks: video_setup lets the setup run and
+  lays its two lists out again as columns (labels x 70, values x 330, twelve rows from y 64, 27
+  apart: the game's own key-binding pages are denser), the values list holding one item per row
+  (its selection, the page's row, highlighted as the Audio page's Output row); video_update is
+  0x6617a7 in C with its calls in order (the +0x2d4 list's input, back's writes, the gamma calls
+  of its left / right on Subtitles) plus up / down between rows (as the Audio page 0x6628b3: sound
+  0x35d, wrapping) and left / right changing the row's value. No text-lookup hook was needed: the
+  new labels are added as our own UTF-16 texts in program memory (galloc, only once the page is
+  opened), which the game copies; existing words (Subtitles, On, Off, Vibration) come from the
+  game's table, so they follow the game's language (the new labels are English).
+- Controls (0x66c752 build, 0x66e9bf run through the list's own input, 0x66eab0 draw): hooks add a
+  fifth label and its value as a one-item list in +0x394 (unused by the Controls pages), drawn
+  after the page; left / right on the row toggles rumble. The pause menu's Controls (the same
+  class, made by 0x61db35 as [0x97d250], drawn by another path in game) is left as it was.
+- Applied at once: Display (win.c win_options; not in test runs, whose window stays hidden),
+  Frame Rate (frame_rate_reapply + frame_limit_options), Frame Limit (frame_limit_options), HUD,
+  Movies, Cut Scenes, Menus (game.c game_options_reapply: re-read on the next frame) [verified:
+  Menus = Stretch stretched the page itself at 1280x720], Vibration (win_rumble_option),
+  Subtitles (the game's own, on back). At the next start: Resolution, V-Sync, Anti-Aliasing,
+  Anisotropic Filtering (read when the device is created); their value reads "(on restart)"
+  while it differs from the one in force. Every change is option_set + options_save at once.
+
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/etm12.py; first translator run; Miles
   stand-in, ReadFileEx; first runs: the intro movies (Atari, Warner Bros., Shiny) play through
@@ -327,4 +369,6 @@ anything drawn from rewritten buffers at 60).
   3200 instead of Enter, the route reaches the lobby in the same state]. (4) "no settings in the
   settings menus": the Video page has only Subtitles; the port's options go into the game's own
   menus (helper in a worktree, under way).
+- 2026-10-27: the port's settings in the game's own Options > Video and Controls pages (decision 10,
+  runtime/menu.c, five hooks); tests/ab.sh same.
 

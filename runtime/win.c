@@ -309,6 +309,9 @@ int host_refresh_hz(void)
 void *host_sdl_window(void) { return window; }
 int host_fullscreen(void) { return window ? fullscreen || start_fullscreen : start_fullscreen; }
 
+/* option rumble changed in the game's menu (menu.c: Controls > Vibration) */
+void win_rumble_option(void) { rumble_on = option_bool("rumble", 1); }
+
 /* Enhanced options changed in the game's menu: display (only once set) and rumble */
 void win_options(void)
 {
