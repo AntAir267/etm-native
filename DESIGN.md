@@ -312,3 +312,19 @@ anything drawn from rewritten buffers at 60).
   reverb; the frame wait sleeps. The Hacking menu needs a saved game (not tested yet).
 - 2026-10-26: drawing-code rewrite started: tooling, 3 render-pass functions (renderpass.c), the
   first stack fix; tests/ab.sh same over 691 checkpoints.
+- 2026-10-27 (Ant's first play of the install): (1) "the actual game is stretched": the screen
+  probe (win.c desktop_probe) measured the full-screen window before full screen applied; on
+  Wayland at 2x scaling the 1280x720 probe is 2560x1440 pixels, and the game drew 16:9 on the
+  2560x1600 panel (the machine also has a 1080x1920 and a 2560x1440 screen). Now it waits up to a
+  second for the window to take its screen's size and otherwise takes the screen's desktop mode.
+  (2) "the joysticks don't work": the machine shows three controller devices (Generic X-Box pad,
+  Microsoft X-Box 360 pad, Handheld Daemon Controller), some silenced by Handheld Daemon; each was
+  a joystick of its own and the game reads the first. pad.c now merges every controller into one
+  joystick (buttons held on any, each stick from the controller pushing it furthest, rumble on
+  all) [verified: scripted second controller walks Ghost]. (3) "can't skip the intro with a
+  controller": the in-engine intro skips with Enter, which A pressed only in menus; A presses Enter
+  in cut scenes too (game.c game_cutscene: in game with the cinema bars up) [verified: A at frame
+  3200 instead of Enter, the route reaches the lobby in the same state]. (4) "no settings in the
+  settings menus": the Video page has only Subtitles; the port's options go into the game's own
+  menus (helper in a worktree, under way).
+
