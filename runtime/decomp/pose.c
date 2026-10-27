@@ -1,10 +1,21 @@
-/* THE CHARACTERS' ANIMATION, evaluated when they are drawn: the pose of each bone at the current
-   time of each playing animation, blended (0x6cf798 and its helpers). See skin.c for where it is
-   called from. [verified: call tree of the lobby frame 6800 (tools/calltree.sh 6465c8): 0x6f2732
-   -> 0x6d0f2d -> 0x6cf798 -> these; disassembly of each]
+/* THE CHARACTERS' ANIMATION, evaluated when they are drawn: each playing animation (a channel)
+   keeps a window of its last four decoded keys per track, decoded from a compressed key stream up
+   to its current frame (0x6c1606, 0x6d7210, 0x6d71c0); a track's value at the channel's time comes
+   from its window (positions 0x6be059 / 0x6be1e9, rotations 0x6be742 by slerps); 0x6cf798 blends
+   every channel's tracks by weight into one rotation and position per bone and builds the bones'
+   world matrices, which 0x6d0f2d (skin.c) turns into skinning matrices.
+   [verified: call tree of the lobby frame 6800 (tools/calltree.sh 6465c8): 0x6f2732 -> 0x6d0f2d ->
+   0x6cf798 -> these; disassembly of each]
+   FOR INTERPOLATION, what the pose is made of (all read here at draw time): per channel (the
+   character's +0x380, next at +0x440) its time in frames (+0x28, a float) and weight (+0x1c), its
+   tweak angles (+0x44c, +0x450, +0x454); per character its world matrix (+0x40), lean angles
+   (+0x374..+0x37c), position scale (+0x300) and the hook's answers. A frame between two updates
+   would evaluate the same at blended channel times (the keys are decoded to the floor of the time,
+   so a time going back rewinds the stream: 0x6c1279) and a blended world matrix. Side effects to
+   keep to once per update: the turning block (pose_turning) moves channel times and +0x2e8 here.
    FLOAT ROUNDING as in quat.c: plain casts (LF) where the translation keeps the x87 stack in C
    locals (GCC narrows single float operations to SSE there), the asm barrier (LX, X) where it keeps
-   it in the CPU record (work/x87mode.py). */
+   it in the CPU record (tools/fpround.py). */
 #include "decomp.h"
 
 #define VEC3_SUB         0x62f4d0u  /* (this = vec3; out, vec3 *) -> out = this - v (mathlib.c) */
@@ -27,10 +38,10 @@ static inline f80 LX(uint32_t a) { return X((f80)RF32(a)); }
 static inline f80 LI(uint32_t a) { return (f80)(int32_t)R32(a); }
 static inline uint32_t FU(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
-/* A PATH OF FOUR KEYS (0x6be059, 0x6be1e9): four integer frame numbers at +0, +4, +8, +0xc and four
-   vec3 points 16 bytes apart from +0x10, evaluated at a time t (frames) in the first segment while
-   t < key 1, in the last while key 2 < t, else in the middle one. [guess: a character's movement
-   path within an animation (root motion); from the layout] */
+/* A TRACK'S KEY WINDOW ("path"): its last four keys, four integer frame numbers at +0, +4, +8, +0xc
+   and four values (vec3 or quaternion) 16 bytes apart from +0x10, evaluated at a time t (frames) in
+   the first segment while t < key 1, in the last while key 2 < t, else in the middle one.
+   [verified: 0x6c1606 shifts keys into them; 0x6cf798 evaluates them with these three] */
 #define PATH_KEY(i)      (4u * (i))
 #define PATH_POINT(i)    (0x10u + 0x10u * (i))
 

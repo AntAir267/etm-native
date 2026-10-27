@@ -8,8 +8,8 @@
    GCC compiles a single operation on two floats stored as a float, (float)((f80)a + (f80)b), as an
    SSE addss, rounding to nearest; where it kept it in the CPU record (FPUSH/ST()), everything stays
    on the x87. So a rewrite uses plain casts (LF) for the first kind and loads through an asm barrier
-   (LX, X) for the second; work/x87mode.py tells which a function is, work/fpops.py compares the
-   two builds' counts of SSE and x87 operations. */
+   (LX, X) for the second; tools/fpround.py tells which a function is and compares the two
+   builds' counts of SSE and x87 operations. */
 #include "decomp.h"
 
 #define SQRTF            0x41e8d0u  /* (float) -> sqrt on the x87 stack (mathlib.c) */

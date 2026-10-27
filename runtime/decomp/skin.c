@@ -8,7 +8,12 @@
    calls below it; disassembly of 0x6f2732 at 0x6f2c5e..0x6f2cd7 and 0x6f2d04..0x6f2d8a]
    FOR INTERPOLATION: the pose is evaluated here, at draw time, from each channel's time (+0x28)
    and weight (+0x1c) and the character's world matrix (+0x40): the state between two updates is
-   those (see pose.c's header).
+   those (see pose.c's header). But this draw-time code also WRITES game state, so it cannot simply
+   run again on a frame between updates: the root bone's movement is taken off the character's
+   position (root_motion: +0x70.. of its world matrix and +0x80.., against +0x3dc), bone positions
+   are kept for the game (+0x3f4.., +0x4c4, +0x49c), the world matrix is copied to +0 and the hook
+   places held props (charhook.c). Those belong to the update; an interpolated frame needs only the
+   matrices (pose.c's 0x6cf798 and the skinning loop here) from blended inputs.
    Float maths as in quat.c: this function's translation keeps the x87 stack in the CPU record, so
    everything stays on the x87 (LX, V: loads through an asm barrier). */
 #include "decomp.h"
@@ -115,7 +120,6 @@ static void root_motion(CPU *c, uint32_t self, uint32_t buf)
    bones, the pelvis rotation), then the hook (1). */
 static void after_pose(CPU *c, uint32_t self, uint32_t buf)
 {
-    uint32_t skel = R32(self + CHAR_SKELETON);
     if ((int32_t)R32(self + CHAR_ROOT_BONE) < 0)
         W8(self + CHAR_ROOT_RESET, 1);
     else if (R8(self + CHAR_ROOT_RESET) == 0)
@@ -131,8 +135,8 @@ static void after_pose(CPU *c, uint32_t self, uint32_t buf)
         game_callm(c, VEC3_COPY, self + CHAR_HEIGHT_POS, 1, r);
     } else
         W32(self + CHAR_HEIGHT_POS + 4, 0xc69c4000u);     /* -20000 */
-    uint32_t kind = R32(R32(R32(self + CHAR_ENTITY) + 0x154) + 0x1c);
-    if (R8(self + CHAR_LOOK_KIND) && (kind == 0x10 || R32(R32(R32(self + CHAR_ENTITY) + 0x154) + 0x1c) == 0xe)) {
+    if (R8(self + CHAR_LOOK_KIND) && (R32(R32(R32(self + CHAR_ENTITY) + 0x154) + 0x1c) == 0x10
+                                      || R32(R32(R32(self + CHAR_ENTITY) + 0x154) + 0x1c) == 0xe)) {
         for (uint32_t i = 0; i < 8; i++) {
             int32_t b = (int32_t)R32(LOOK_BONES + 4 * i);
             if (b > (int32_t)R32(R32(self + CHAR_SKELETON) + SKEL_BONES)) {
@@ -156,7 +160,6 @@ static void after_pose(CPU *c, uint32_t self, uint32_t buf)
             game_callm(c, VEC3_COPY, self + CHAR_KEPT_POS + 12 * i, 1, r);
         }
     }
-    (void)skel;
     uint32_t F = dc_frame(c, 16);    /* the quaternion (-0xd4) */
     game_callm(c, QUAT_CTOR_MAT4, F, 1, buf + 0x40 * R32(R32(self + CHAR_BONE_IDS) + 0x30));
     game_callm(c, MAT3_FROM_QUAT, self + CHAR_PELVIS_ROT, 1, F);
