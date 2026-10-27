@@ -139,6 +139,8 @@ static const char *const help[][2] = {
     {"resolution", "resolution: desktop (the default: the screen's size), original (MatrixConfig.ini's RESOLUTION, "
                    "0-6 = 640x480 .. 2048x1536) or WxH"},
     {"anisotropic", "anisotropic: 16, 8, 4, 2 or off (texture filtering)"},
+    {"hud", "hud: corners (the default: on wide screens the HUD sits at the screen's edges, as far from them as on a 4:3 "
+            "screen) or center (in the centred 4:3 area); with ui = center"},
     {"ui", "ui: center (the default: menus, text, HUD and movies keep their 4:3 shape on wide screens, fades and "
            "bars still fill the screen) or stretch (the game's own)"},
     {NULL, NULL}};

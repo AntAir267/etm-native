@@ -73,6 +73,7 @@ static int hook_settings_load_fn(CPU *c)
      13 quad: 4 x (u, v as i16), then 4 x (x i16, y i16, i32) (49)
    ui = stretch: as the game draws it. Movies (0x7be3fb, 640 x 448 pictures) are pillarboxed the
    same way through the screen-space draw hook (d3d9.c ui2d_layout). */
+int game_front_end(void);
 static int ui_mode = -1;               /* 1 center, 0 stretch */
 static float ui_s, ui_off_px;          /* x scale (pixels a design unit) and the area's offset */
 static float ui_stretch_orig;          /* [0x97eda0] as the game set it */
@@ -92,66 +93,178 @@ static int ui_active(void)
 static uint16_t rd16g(uint32_t a) { return R16(a); }
 static void wr16g(uint32_t a, uint16_t v) { W16(a, v); }
 
+/* HUD corners (option hud = corners, the default; in play only, menus stay centred): items are
+   anchored as wholes to the left edge, the centre or the right edge, so the HUD's distance from
+   the screen's edges is the 4:3 layout's. A line of text is many items (each glyph is its own
+   position and sprite): glyphs on the same row, each starting near the last one's end, are one
+   group, and a group is anchored by its extent: left when it lies in the left part (starts in
+   the first quarter, ends before 40 %), right when it lies in the right part, centred otherwise
+   (subtitles, tips, the crosshair). */
+enum { ANCHOR_CENTER, ANCHOR_LEFT, ANCHOR_RIGHT, ANCHOR_FULL };
+typedef struct {
+    uint32_t at;                    /* the command's address */
+    uint8_t op;
+    uint32_t xat;                   /* where its x is (op 2, op 12 mode 0), 0 none */
+    float x0, x1, y0, y1;           /* its extent in design units (op 2 + 7: the sprite) */
+    int group, anchor;
+} BlitItem;
+#define BLIT_MAX 8192
+static BlitItem items[BLIT_MAX];
+static int hud_corners = -1;
+
+static int anchor_of(float x0, float x1)
+{
+    if (x0 <= 1 && x1 >= 639)
+        return ANCHOR_FULL;
+    if (x0 < 160 && x1 < 256)
+        return ANCHOR_LEFT;
+    if (x1 > 480 && x0 > 384)
+        return ANCHOR_RIGHT;
+    return ANCHOR_CENTER;
+}
+
 static void blit_layout(void)
 {
     uint32_t base = R32(0x92ed64), n = R32(0x979bcc);
     float off_d = ui_off_px / ui_s;                  /* the offset in design units */
     float full_d = 640.0f + 2 * off_d;               /* the screen's width in design units */
-    int pos_x0 = -1;                                 /* the last position's x, for op 7 */
-    uint32_t pos_at = 0;
-    for (uint32_t i = 0; i < n; ) {
+    if (hud_corners < 0)
+        hud_corners = strcasecmp(option_str("hud", "corners"), "center") != 0;
+    int corners = hud_corners && !game_front_end();
+    /* 1: the items, with the extent each covers */
+    int ni = 0;
+    float px = 0, py = 0;                            /* the last position */
+    int pos_item = -1;                               /* the item of the last position command */
+    for (uint32_t i = 0; i < n && ni < BLIT_MAX; ) {
         uint32_t a = base + i;
-        switch (R8(a)) {
-        case 2: {
-            uint16_t x = rd16g(a + 1);
-            pos_x0 = x;
-            pos_at = a + 1;
-            if (x < 0x8000u)
-                wr16g(a + 1, (uint16_t)lroundf((float)x + off_d));
+        BlitItem *it = &items[ni];
+        memset(it, 0, sizeof *it);
+        it->at = a;
+        it->op = R8(a);
+        it->group = -1;
+        it->x0 = 1e9f;
+        switch (it->op) {
+        case 2:
+            px = rd16g(a + 1);
+            py = rd16g(a + 3);
+            it->xat = a + 1;
+            it->x0 = it->x1 = px;
+            it->y0 = it->y1 = py;
+            pos_item = ni;
+            ni++;
             i += 9;
-            break;
-        }
-        case 7: {
-            int32_t w = (int32_t)R32(a + 5);
-            if (pos_x0 == 0 && w >= 640) {          /* across the design: across the screen */
-                wr16g(pos_at, 0);
-                W32(a + 5, (uint32_t)lroundf((float)w * full_d / 640.0f));
+            continue;
+        case 7:
+            if (pos_item >= 0) {                     /* the sprite widens its position's item */
+                BlitItem *p = &items[pos_item];
+                int32_t w = (int32_t)R32(a + 5), h = (int32_t)R32(a + 9);
+                p->x1 = px + (float)w;
+                p->y1 = py + (float)h;
             }
             i += 13;
+            continue;                                /* (no item of its own) */
+        case 12: {
+            int32_t w = (int32_t)R32(a + 8), h = (int32_t)R32(a + 12);
+            if (R8(a + 1) == 0) {
+                it->xat = a + 2;
+                it->x0 = rd16g(a + 2);
+                it->y0 = py;
+            } else {
+                it->x0 = px;
+                it->y0 = rd16g(a + 2);
+            }
+            it->x1 = it->x0 + (float)w;
+            it->y1 = it->y0 + (float)h;
+            ni++;
+            i += 16;
+            continue;
+        }
+        case 13: {
+            float lo = 1e9f, hi = -1e9f, ylo = 1e9f, yhi = -1e9f;
+            for (int k = 0; k < 4; k++) {
+                float x = (int16_t)rd16g(a + 1 + 16 + 8 * k), y = (int16_t)rd16g(a + 1 + 16 + 8 * k + 2);
+                if (x < lo) lo = x;
+                if (x > hi) hi = x;
+                if (y < ylo) ylo = y;
+                if (y > yhi) yhi = y;
+            }
+            it->x0 = lo; it->x1 = hi; it->y0 = ylo; it->y1 = yhi;
+            ni++;
+            i += 49;
+            continue;
+        }
+        case 3: case 4: case 5: case 8: i += 5; continue;
+        case 0: case 9: case 10: case 11: i += 1; continue;
+        default:
+            LOG(LOG_ALWAYS, "2D layout: unknown blit command %u at +%u: the rest drawn as is", R8(a), i);
+            n = i;
+            break;
+        }
+        break;
+    }
+    /* 2: groups (text lines) and their anchors */
+    int ngroups = 0;
+    for (int k = 0; k < ni; k++) {
+        BlitItem *it = &items[k];
+        if (it->op == 2 && k > 0 && items[k - 1].op == 2 && items[k - 1].group >= 0) {
+            BlitItem *pv = &items[k - 1];
+            float h = pv->y1 - pv->y0 > 4 ? pv->y1 - pv->y0 : 8;
+            if (fabsf(it->y0 - pv->y0) <= 1.5f && it->x0 >= pv->x0 - 1 && it->x0 <= pv->x1 + h * 1.5f) {
+                it->group = pv->group;
+                continue;
+            }
+        }
+        it->group = ngroups++;
+    }
+    static float gx0[BLIT_MAX], gx1[BLIT_MAX];
+    static int ganchor[BLIT_MAX];
+    for (int g = 0; g < ngroups; g++) { gx0[g] = 1e9f; gx1[g] = -1e9f; }
+    for (int k = 0; k < ni; k++) {
+        int g = items[k].group;
+        if (items[k].x0 < gx0[g]) gx0[g] = items[k].x0;
+        if (items[k].x1 > gx1[g]) gx1[g] = items[k].x1;
+    }
+    for (int g = 0; g < ngroups; g++) {
+        int an = anchor_of(gx0[g], gx1[g]);
+        if (!corners && (an == ANCHOR_LEFT || an == ANCHOR_RIGHT))
+            an = ANCHOR_CENTER;
+        ganchor[g] = an;
+    }
+    /* 3: the new positions */
+    for (int k = 0; k < ni; k++) {
+        BlitItem *it = &items[k];
+        int an = ganchor[it->group];
+        float shift = an == ANCHOR_LEFT ? 0 : an == ANCHOR_RIGHT ? 2 * off_d : off_d;
+        uint32_t a = it->at;
+        switch (it->op) {
+        case 2: {
+            uint16_t x = rd16g(a + 1);
+            if (an == ANCHOR_FULL && x == 0) {       /* across the design: across the screen */
+                uint32_t s7 = a + 9;                 /* (its sprite follows: op 7) */
+                if (s7 < base + n && R8(s7) == 7) {
+                    int32_t w = (int32_t)R32(s7 + 5);
+                    W32(s7 + 5, (uint32_t)lroundf((float)w * full_d / 640.0f));
+                }
+            } else if (x < 0x8000u)
+                wr16g(a + 1, (uint16_t)lroundf((float)x + shift));
             break;
         }
         case 12:
-            if (R8(a + 1) == 0) {
-                uint16_t x = rd16g(a + 2);
-                int32_t w = (int32_t)R32(a + 8);
-                if (x == 0 && w >= 640)
-                    W32(a + 8, (uint32_t)lroundf((float)w * full_d / 640.0f));
+            if (it->xat) {
+                uint16_t x = rd16g(it->xat);
+                if (an == ANCHOR_FULL && x == 0)
+                    W32(a + 8, (uint32_t)lroundf((float)(int32_t)R32(a + 8) * full_d / 640.0f));
                 else if (x < 0x8000u)
-                    wr16g(a + 2, (uint16_t)lroundf((float)x + off_d));
+                    wr16g(it->xat, (uint16_t)lroundf((float)x + shift));
             }
-            i += 16;
             break;
-        case 13: {
-            int16_t xs[4];
-            int lo = 32767, hi = -32768;
-            for (int k = 0; k < 4; k++) {
-                xs[k] = (int16_t)rd16g(a + 1 + 16 + 8 * k);
-                if (xs[k] < lo) lo = xs[k];
-                if (xs[k] > hi) hi = xs[k];
+        case 13:
+            for (int q = 0; q < 4; q++) {
+                float x = (int16_t)rd16g(a + 1 + 16 + 8 * q);
+                x = an == ANCHOR_FULL ? x * full_d / 640.0f : x + shift;
+                wr16g(a + 1 + 16 + 8 * q, (uint16_t)(int16_t)lroundf(x));
             }
-            int full = lo <= 0 && hi >= 640;
-            for (int k = 0; k < 4; k++) {
-                float x = full ? (float)xs[k] * full_d / 640.0f : (float)xs[k] + off_d;
-                wr16g(a + 1 + 16 + 8 * k, (uint16_t)(int16_t)lroundf(x));
-            }
-            i += 49;
             break;
-        }
-        case 3: case 4: case 5: case 8: i += 5; break;
-        case 0: case 9: case 10: case 11: i += 1; break;
-        default:
-            LOG(LOG_ALWAYS, "2D layout: unknown blit command %u at +%u: the rest drawn as is", R8(a), i);
-            return;
         }
     }
 }
