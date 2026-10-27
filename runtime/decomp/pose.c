@@ -476,3 +476,514 @@ static int dc_6c1606(CPU *c)
     return decomp_ret(c, e, eax, 0);
 }
 DECOMP(6c1606, dc_6c1606);
+
+/* ------------------------------------------------------------------ the pose (0x6cf798) */
+
+/* THE CHARACTER (this of 0x6cf798 and 0x6d0f2d; skin.c has the rest) [verified: the reads below;
+   names guess unless said] */
+#define CHAR_WORLD       0x40u      /* 4x4: where the character stands */
+#define CHAR_BONE_IDS    0x168u     /* table of special bones: +0x30 (pelvis?) +0x34 +0x38 +0x3c
+                                       (spine/neck chain?) +0x6c +0x70 (head/neck?) [guess] */
+#define CHAR_MODEL       0x2c0u     /* +0x14 float, +0x1c each bone's bind position (vec3) */
+#define CHAR_FLAGS       0x2c4u
+#define CHAR_BLEND       0x2e8u     /* float, eased toward 0.2 / 0.7 / 1 by the turning block */
+#define CHAR_HOOK        0x2fcu     /* float (*)(int what, character *, void *) (0x6fb254) or 0 */
+#define CHAR_SCALE       0x300u     /* float: the animations' positions scaled by it */
+#define CHAR_LEAN        0x374u     /* three floats; the root turned by them when any is beyond
+                                       +-0.01 [guess: lean / tilt] */
+#define CHAR_CHANNELS    0x380u     /* first animation channel; each next at +0x440 */
+#define CHAR_RANGE_OFF   0x394u     /* per bone range, the offset of its bones in the buffer */
+#define MODEL_ROOT_Y     0x14u
+#define MODEL_BIND_POS   0x1cu
+#define SKEL_RANGES      0x10u      /* (short first bone, short count) per range */
+#define SKEL_ROOT_Y      0x4cu
+#define BONE_BIND_ROT    0x30u      /* 3x3 bind rotation (relative to the parent) */
+#define BONE_BIND_QUAT   0x54u      /* the same as a quaternion */
+#define BONE_PARENT      0x64u      /* short */
+#define CH_NEXT          0x440u
+#define CH_STATE         8u         /* +0xc float (turn per unit weight), +0x14 float */
+#define CH_WEIGHT        0x1cu      /* float: how much of the pose this channel gives */
+#define CH_TIME_COPY     0x2cu
+#define CH_TURN_Z        0x44cu     /* float: the root rotated about z by -it */
+#define CH_ROT_A         0x450u     /* floats added up weighted: the head/neck bones rotated by */
+#define CH_ROT_B         0x454u     /*   halves of them [guess] */
+#define ANIM_ROOT_Y      0x18u      /* float: the root's height when not 0 */
+#define ANIM_ROOT_FLAGS  0x20u      /* short: not negative, the root keeps x and z at 0 */
+#define ANIM_FLAGS       0x28u      /* short: 0x100 = applied after the others, on top */
+#define TRACKS_COUNT     0xau       /* short, in the track table */
+#define TRACK(k)         (0xcu + 8u * (k))   /* entry: float weight, short bone, byte position */
+#define G_ANIM_SPEED     0x97f570u  /* float (.data) [guess: a speed scale] */
+
+#define MAT3_CTOR        0x6bc6d0u  /* (this = mat3) */
+#define MAT3_FROM_QUAT   0x6b9e68u  /* (this = mat3; quat *) (quat.c) */
+#define MAT3_YAW         0x6b9a56u  /* (this = mat3) -> float on the x87 stack [guess] */
+#define MAT3_IDENTITY    0x6b96fcu  /* (this = mat3) [guess] */
+#define MAT3_ROTATE      0x6b9798u  /* (this = mat3; float, float, float) [guess: angles] */
+#define MAT3_MUL         0x6b950bu  /* (this = mat3; mat3 *) */
+#define MAT3_CTOR_QUAT   0x6bc800u  /* (this = mat3; quat *) (quat.c) */
+#define QUAT_FROM_MAT3   0x6ba020u  /* (this = quat; mat3 *) */
+#define QUAT_MUL         0x6ba5ddu  /* (this = quat; quat *out, quat *b) -> out */
+#define QUAT_CTOR        0x6b42a0u  /* (this = quat) (mathlib.c) */
+#define VEC3_CTOR        0x41e940u
+#define VEC3_ADD_TO      0x5e0980u  /* (this = vec3; vec3 *) this += v */
+#define VEC3_SCALE_BY    0x6b4470u  /* (this = vec3; float *) this *= s */
+#define VEC_CTOR_ITER    0x5fe5c0u  /* (array, size, count, ctor) */
+#define QUAT_CTOR_STUB   0x40755eu  /* the incremental-link stubs the original passes as ctors */
+#define VEC3_CTOR_STUB   0x4017c1u
+#define CHAR_SPEED       0x5f1870u  /* (this = character) -> float on the x87 stack [guess] */
+#define CH_DECODE        0x6c1606u
+#define PATH_LINEAR      0x6be059u
+#define PATH_SMOOTH      0x6be1e9u
+#define PATH_ROT         0x6be742u
+#define MAT4_CTOR        0x47f630u
+#define MAT4_IDENTITY    0x6ba8efu
+#define MAT4_FROM_ROT    0x6bb121u  /* (this = mat4; mat3 *, vec3 *) */
+#define MAT4_FROM_QUAT   0x6bb1d8u  /* (this = mat4; quat *, vec3 *) */
+#define MAT4_MUL         0x6bb745u  /* (this = mat4; mat4 *) this *= b */
+#define MAT4_EULER       0x6ba742u  /* (this = mat4; float ax, ay, az) degrees */
+#define MAT4_ROTATE      0x6ba996u  /* (this = mat4; float, float, float) [guess: angles] */
+#define MAT4_TURN        0x6bab43u  /* (this = mat4; float) [guess: about the vertical] */
+
+#define F_100            0x8fa104u  /* .rdata 100.0f: weights are percentages */
+#define F_HUNDREDTH      0x8fa048u  /* .rdata 0.01f */
+#define F_INV360         0x8fcdfcu  /* .rdata 1/360 */
+#define F_M180           0x8fbd28u
+#define F_180            0x8fa04cu
+#define F_360            0x8fae9cu
+#define F_70             0x8fa134u
+#define F_M70            0x8fa138u
+#define F_TENTH          0x8fa790u
+#define F_MINUS1         0x8fa0a0u
+#define F_3_5            0x8fcde0u
+#define F_0_65           0x8fcdf8u
+#define F_0_35           0x8fa7e4u
+#define F_20             0x8fa030u
+#define F_30             0x8fa17cu
+#define F_M30            0x8fcdf4u
+#define F_0_8            0x8fa32cu
+#define D_HUNDREDTH      0x8fbd90u  /* .rdata 0.01 (double) */
+#define D_MHUNDREDTH     0x8fcde8u  /* .rdata -0.01 (double) */
+
+/* the original's frame, kept as it was (fp is its ebp): the arrays and the locals callees get */
+#define FR_ROTW          0x210u     /* float[128]: each bone's rotation weight so far */
+#define FR_POSW          0xc20u     /* float[128]: position weight */
+#define FR_ROT           0xa18u     /* quat[128]: the blended rotations (the hook gets them) */
+#define FR_POS           0x1230u    /* vec3[128]: the blended positions */
+#define FR_TMP           0x10u
+#define FR_M3            0x12b0u
+#define FR_HOOKARG       0x12b4u
+#define FR_QBIND         0x12e4u
+#define FR_Q             0x12f4u
+#define FR_M3A           0x1318u
+#define FR_M3B           0x133cu
+#define FR_P             0x134cu
+#define FR_QC            0x1374u
+#define FR_R             0x13b8u
+#define FR_QOUT          0x13c8u
+#define FR_ONE           0x13ccu
+#define FR_V3            0x13d8u
+#define FR_S1            0x13dcu
+#define FR_S2            0x13e0u
+#define FR_SIZE          0x13e8u
+
+typedef struct {
+    uint32_t self, nb, mask, out, fp;
+    float turn;    /* -0x1238: the root's turn, from rotation tracks of bone 0 */
+    float ra;      /* -0xc: CH_ROT_A weighted */
+    float rb;      /* -0x1248: CH_ROT_B weighted */
+    float rc;      /* -8: from the hook's 0x27 answer */
+    float lean;    /* -0x214: from rc */
+} Pose;
+
+#define ROT(fp, i)       ((fp) - FR_ROT + 16u * (i))
+#define POS(fp, i)       ((fp) - FR_POS + 12u * (i))
+#define ROTW(fp, i)      ((fp) - FR_ROTW + 4u * (i))
+#define POSW(fp, i)      ((fp) - FR_POSW + 4u * (i))
+
+static void copy16(uint32_t dst, uint32_t src)
+{
+    for (uint32_t k = 0; k < 16; k += 4)
+        W32(dst + k, R32(src + k));
+}
+
+/* A channel with a turning state (its CH_STATE +0x14 and its +0x24 not negative), not reached on
+   the lobby route [verified: the call tree has no hook calls 0x26/0x27]: asks the hook (0x26, 0x27)
+   how far the character should turn, works out the angle still to go against the animation's
+   time (a whole turn = its length), eases CHAR_BLEND and moves the channel's time by it. */
+static void pose_turning(CPU *c, Pose *P, uint32_t ch)
+{
+    uint32_t self = P->self, fp = P->fp, hook;
+    f80 n = (f80)(int32_t)(int16_t)R16(R32(ch + CH_ANIM) + ANIM_FRAMES) - LX(F_ONE);
+    float len = (float)n;                        /* the last frame */
+    float per = (float)(n * LX(F_INV360));       /* frames per degree */
+    float a = 0;
+    W32(fp - FR_HOOKARG, 0);
+    if ((hook = R32(self + CHAR_HOOK))) {
+        a = (float)(game_call_st0(c, hook, 3, 0x26, self, fp - FR_HOOKARG) + V(a));
+        P->rc = (float)(game_call_st0(c, R32(self + CHAR_HOOK), 3, 0x27, self, fp - FR_HOOKARG) * LX(ch + CH_WEIGHT));
+    }
+    game_callm(c, MAT3_CTOR, fp - FR_M3, 0);
+    game_callm(c, MAT3_FROM_QUAT, fp - FR_M3, 1, ROT(fp, 0));
+    (void)(float)game_callm_st0(c, MAT3_YAW, fp - FR_M3, 0);    /* stored, never read */
+    float ang = a;
+    ang = (float)(V(ang) + V(P->turn));
+    ang = (float)(V(ang) - (V(P->rb) * LX(F_ONE) + V(P->ra) * LX(F_ONE)));
+    while (V(ang) < LX(F_M180))
+        ang = (float)(V(ang) + LX(F_360));
+    while (V(ang) >= LX(F_180))
+        ang = (float)(V(ang) - LX(F_360));
+    float d = (float)(V(ang) - LX(ch + CH_TIME) / V(per));
+    while (V(d) <= LX(F_M180))
+        d = (float)(V(d) + LX(F_360));
+    uint32_t s = 0x3f333333u;                    /* 0.7 */
+    if (V(ang) > LX(F_70) || V(ang) < LX(F_M70))
+        s = 0x3e4ccccdu;                         /* 0.2 */
+    if (LX(ch + CH_TIME) <= LX(F_ZERO)) {
+        W32(self + CHAR_BLEND, 0x3f800000u);
+        s = 0x3f800000u;
+    }
+    float sf;
+    memcpy(&sf, &s, 4);
+    if (V(sf) > LX(self + CHAR_BLEND))
+        SF(self + CHAR_BLEND, (V(sf) - LX(self + CHAR_BLEND)) * LX(F_TENTH) + LX(self + CHAR_BLEND));
+    else
+        SF(self + CHAR_BLEND, (V(sf) - LX(self + CHAR_BLEND)) * LX(F_HALF) + LX(self + CHAR_BLEND));
+    d = (float)(V(d) * LX(self + CHAR_BLEND));
+    float v = (float)(game_callm_st0(c, CHAR_SPEED, self, 0) * LX(G_ANIM_SPEED));
+    if (V(v) > LX(F_ONE))
+        v = 1.0f;
+    SF(ch + CH_TIME, V(d) * V(per) * V(v) + LX(ch + CH_TIME));
+    while (LX(ch + CH_TIME) >= V(len))
+        SF(ch + CH_TIME, LX(ch + CH_TIME) - V(len));
+    while (LX(ch + CH_TIME) <= LX(F_ZERO))
+        SF(ch + CH_TIME, V(len) + LX(ch + CH_TIME));
+    W32(ch + CH_TIME_COPY, R32(ch + CH_TIME));
+}
+
+/* One rotation track's quaternion q (FR_Q) into bone slot's blend: the first contribution taken,
+   later ones slerped in by weight; in the second pass (channels flagged 0x100) multiplied on top
+   instead (a bone with nothing yet starts from its bind rotation, weight 100). */
+static void pose_rot_into(CPU *c, Pose *P, int pass, uint32_t slot, uint32_t brec, float tw)
+{
+    uint32_t fp = P->fp;
+    if (pass) {
+        if (LX(ROTW(fp, slot)) == LX(F_ZERO)) {
+            W32(ROTW(fp, slot), 0x42c80000u);
+            copy16(ROT(fp, slot), brec + BONE_BIND_QUAT);
+        }
+        uint32_t r = game_callm(c, QUAT_MUL, fp - FR_Q, 2, fp - FR_QOUT, ROT(fp, slot));
+        copy16(ROT(fp, slot), r);
+    } else if (LX(ROTW(fp, slot)) == LX(F_ZERO)) {
+        copy16(ROT(fp, slot), fp - FR_Q);
+        WF32(ROTW(fp, slot), tw);
+    } else {
+        float nw = (float)(V(tw) + LX(ROTW(fp, slot)));
+        game_callm(c, SLERP, ROT(fp, slot), 3, ROT(fp, slot), fp - FR_Q, FU((float)(V(tw) / V(nw))));
+        WF32(ROTW(fp, slot), nw);
+    }
+}
+
+/* One track of a channel (k: its index; trk its entry; win its key window slot). Returns 0 when
+   the channel's remaining tracks are to be skipped (a bone past the skeleton with no ranges). */
+static int pose_track(CPU *c, Pose *P, int pass, uint32_t ch, uint32_t trk, uint32_t win,
+                      uint32_t wbits, float t, int32_t *j, int32_t *off, int32_t *limit)
+{
+    uint32_t self = P->self, fp = P->fp;
+    while ((int16_t)R16(trk + 4) >= *limit) {
+        if (!P->mask)
+            return 0;
+        ++*j;
+        *off = (int32_t)R32(self + CHAR_RANGE_OFF + 4 * (uint32_t)*j);
+        uint32_t rg = R32(R32(self + CHAR_SKELETON) + SKEL_RANGES);
+        *limit = (int16_t)R16(rg + 4 * (uint32_t)*j) + (int16_t)R16(R32(R32(self + CHAR_SKELETON) + SKEL_RANGES) + 4 * (uint32_t)*j + 2);
+    }
+    int32_t bone = (int16_t)R16(trk + 4);
+    uint32_t slot = (uint32_t)(bone + *off);
+    uint32_t brec = R32(self + CHAR_SKELETON) + 0x7c * (uint32_t)bone + 0x24;
+    float tw;
+    if (wbits == 0x3f800000u)
+        memcpy(&tw, &(uint32_t){R32(trk)}, 4);
+    else if (!(LX(trk) == LX(F_100))) {
+        float w;
+        memcpy(&w, &wbits, 4);
+        tw = (float)(LX(F_100) / (LX(F_ONE) - V(w) * LX(trk) / (LX(trk) + LX(F_100))) - LX(F_100));
+    } else {
+        float w;
+        memcpy(&w, &wbits, 4);
+        tw = (float)(V(w) * LX(trk));
+    }
+    if (R32(win) == 0) {
+        /* no keys: a rotation track blends in the bind rotation */
+        if (R8(trk + 6) == 0) {
+            if (LX(ROTW(fp, slot)) == LX(F_ZERO)) {
+                copy16(ROT(fp, slot), brec + BONE_BIND_QUAT);
+                WF32(ROTW(fp, slot), tw);
+            } else {
+                float nw = (float)(V(tw) + LX(ROTW(fp, slot)));
+                copy16(fp - FR_QBIND, brec + BONE_BIND_QUAT);
+                game_callm(c, SLERP, ROT(fp, slot), 3, ROT(fp, slot), fp - FR_QBIND, FU((float)(V(tw) / V(nw))));
+                WF32(ROTW(fp, slot), nw);
+            }
+        }
+        return 1;
+    }
+    if (R8(trk + 6) == 0) {
+        /* a rotation */
+        game_callm(c, QUAT_CTOR, fp - FR_Q, 0);
+        if ((int32_t)R32(R32(win)) < 0)
+            copy16(fp - FR_Q, R32(win) + PATH_POINT(0));
+        else
+            game_call(c, PATH_ROT, 3, R32(win), fp - FR_Q, FU(t));
+        if (bone == 0) {
+            if (!(LX(ch + CH_TURN_Z) == LX(F_ZERO))) {
+                game_callm(c, MAT3_CTOR_QUAT, fp - FR_M3A, 1, fp - FR_Q);
+                game_callm(c, MAT3_CTOR, fp - FR_M3B, 0);
+                game_callm(c, MAT3_IDENTITY, fp - FR_M3B, 0);
+                game_callm(c, MAT3_ROTATE, fp - FR_M3B, 3, 0, FU((float)-LX(ch + CH_TURN_Z)), 0);
+                game_callm(c, MAT3_MUL, fp - FR_M3A, 1, fp - FR_M3B);
+                game_callm(c, QUAT_FROM_MAT3, fp - FR_Q, 1, fp - FR_M3A);
+            }
+            P->turn = (float)(V(tw) * LX(R32(ch + CH_STATE) + 0xc) / LX(F_100) + V(P->turn));
+        }
+        pose_rot_into(c, P, pass, slot, brec, tw);
+        return 1;
+    }
+    /* a position */
+    game_callm(c, VEC3_CTOR, fp - FR_P, 0);
+    if ((int32_t)R32(R32(win)) < 0)
+        game_callm(c, VEC3_COPY, fp - FR_P, 1, R32(win) + PATH_POINT(0));
+    else if (LX(POSW(fp, slot)) == LX(F_ZERO))
+        game_call(c, PATH_SMOOTH, 3, R32(win), fp - FR_P, FU(t));
+    else
+        game_call(c, PATH_LINEAR, 3, R32(win), fp - FR_P, FU(t));
+    if (bone == 0) {
+        if (!((int16_t)R16(R32(ch + CH_ANIM) + ANIM_ROOT_FLAGS) < 0)) {
+            W32(fp - FR_P, 0);
+            W32(fp - FR_P + 8, 0);
+        }
+        if (!(LX(R32(ch + CH_ANIM) + ANIM_ROOT_Y) == LX(F_ZERO)))
+            W32(fp - FR_P + 4, R32(R32(ch + CH_ANIM) + ANIM_ROOT_Y));
+    }
+    if (LX(POSW(fp, slot)) == LX(F_ZERO)) {
+        W32(fp - FR_ONE, 0x3f800000u);
+        uint32_t r = game_callm(c, VEC3_SCALE, fp - FR_P, 2, fp - FR_V3, fp - FR_ONE);
+        game_callm(c, VEC3_COPY, POS(fp, slot), 1, r);
+        WF32(POSW(fp, slot), tw);
+    } else {
+        float nw = (float)(V(tw) + LX(POSW(fp, slot)));
+        SF(fp - FR_S1, LX(POSW(fp, slot)) / V(nw));
+        game_callm(c, VEC3_SCALE_BY, POS(fp, slot), 1, fp - FR_S1);
+        SF(fp - FR_S2, V(tw) / V(nw));
+        game_callm(c, VEC3_SCALE_BY, fp - FR_P, 1, fp - FR_S2);
+        game_callm(c, VEC3_ADD_TO, POS(fp, slot), 1, fp - FR_P);
+        WF32(POSW(fp, slot), nw);
+    }
+    return 1;
+}
+
+/* One channel's tracks into the blend. */
+static void pose_channel(CPU *c, Pose *P, int pass, uint32_t ch)
+{
+    uint32_t self = P->self, anim = R32(ch + CH_ANIM), tracks = R32(anim + ANIM_TRACKS);
+    if (LX(R32(ch + CH_STATE) + 0x14) >= LX(F_ZERO) && LX(ch + 0x24) >= LX(F_ZERO))
+        pose_turning(c, P, ch);
+    if (!(LX(ch + CH_ROT_A) == LX(F_ZERO)))
+        P->ra = (float)(LX(ch + CH_ROT_A) * LX(ch + CH_WEIGHT) + V(P->ra));
+    if (!(LX(ch + CH_ROT_B) == LX(F_ZERO)))
+        P->rb = (float)(LX(ch + CH_ROT_B) * LX(ch + CH_WEIGHT) + V(P->rb));
+    float t;
+    memcpy(&t, &(uint32_t){R32(ch + CH_TIME)}, 4);
+    if (V(t) < LX(F_ZERO))
+        t = 0;
+    FPUSH(V(t));
+    int32_t frame = (int32_t)game_call(c, CRT_FTOL, 0);
+    if (frame > (int16_t)R16(R32(ch + CH_ANIM) + ANIM_FRAMES) - 1) {
+        frame = (int16_t)R16(R32(ch + CH_ANIM) + ANIM_FRAMES) - 1;
+        t = (float)(f80)frame;
+    }
+    uint32_t wbits = R32(ch + CH_WEIGHT);
+    game_callm(c, CH_DECODE, ch, 0);
+    int32_t j = -1, off = 0, limit = (int32_t)R32(R32(self + CHAR_SKELETON) + SKEL_BONES);
+    uint32_t trk = tracks + TRACK(0), win = ch + CH_WINDOW(0);
+    for (int32_t k = 0; k < (int16_t)R16(tracks + TRACKS_COUNT); k++, trk += 8, win += 4)
+        if (!pose_track(c, P, pass, ch, trk, win, wbits, t, &j, &off, &limit))
+            break;
+}
+
+/* The adjustments of the head/neck/spine bones (CHAR_BONE_IDS) before a bone is placed on its
+   parent: by halves of the channels' CH_ROT_A / CH_ROT_B and the hook's turn. Returns 1 when the
+   bone is done (placed already). */
+static int pose_bone_adjust(CPU *c, Pose *P, uint32_t i, uint32_t m, uint32_t parent)
+{
+    uint32_t ids = R32(P->self + CHAR_BONE_IDS);
+    if ((int32_t)i > (int32_t)R32(ids + 0x3c) && (int32_t)i > (int32_t)R32(R32(P->self + CHAR_BONE_IDS) + 0x38))
+        return 0;
+    for (int pass = 0; pass < 2; pass++) {
+        if ((int32_t)i != (int32_t)R32(R32(P->self + CHAR_BONE_IDS) + (pass ? 0x70 : 0x6c)))
+            continue;
+        if (!(V(P->rb) == LX(F_ZERO)))
+            game_callm(c, MAT4_ROTATE, m, 3, 0, 0, FU((float)(V(P->rb) * LX(F_HALF))));
+        if (!(V(P->rc) == LX(F_ZERO)))
+            game_callm(c, MAT4_ROTATE, m, 3, 0, 0, FU((float)(V(P->rc) * LX(F_HALF))));
+        game_callm(c, MAT4_MUL, m, 1, parent);
+        if (!(V(P->ra) == LX(F_ZERO)))
+            game_callm(c, MAT4_EULER, m, 3, 0, 0, FU((float)(V(P->ra) * LX(F_HALF))));
+        return 1;
+    }
+    if ((int32_t)i == (int32_t)R32(R32(P->self + CHAR_BONE_IDS) + 0x3c)) {
+        if (!(V(P->lean) == LX(F_ZERO)))
+            game_callm(c, MAT4_ROTATE, m, 3, FU((float)(-V(P->lean) * LX(F_ONE))), 0, 0);
+    } else if ((int32_t)i == (int32_t)R32(R32(P->self + CHAR_BONE_IDS) + 0x38)) {
+        if ((R32(P->self + CHAR_FLAGS) & 0x280000u) && !(V(P->lean) == LX(F_ZERO)))
+            game_callm(c, MAT4_ROTATE, m, 3, FU((float)(-V(P->lean) * LX(F_ONE))), 0, 0);
+    } else if ((int32_t)i == (int32_t)R32(R32(P->self + CHAR_BONE_IDS) + 0x34)) {
+        if (!(V(P->lean) == LX(F_ZERO)))
+            game_callm(c, MAT4_ROTATE, m, 3, FU((float)(-V(P->lean) * LX(F_0_8))), 0, 0);
+    }
+    return 0;
+}
+
+/* one of the three lean values beyond +-0.01 (doubles in .rdata) */
+static int lean_beyond(uint32_t a)
+{
+    return LX(a) > (f80)RF64(D_HUNDREDTH) || LX(a) < (f80)RF64(D_MHUNDREDTH);
+}
+
+/* The bone matrices from the blend: each bone's rotation (or its bind rotation when nothing
+   animated it) and position (scaled, on the bind position; or the bind position) as a matrix,
+   adjusted and placed on its parent's (bone 0: lifted to the model's height, leaned, turned,
+   mirrored when nothing rotates it, and placed by the character's world matrix). Bones past the
+   skeleton's count belong to the attached ranges (the mask's bits). */
+static int32_t pose_matrices(CPU *c, Pose *P)
+{
+    uint32_t self = P->self, fp = P->fp, out = P->out;
+    int32_t off2 = 0, j2 = -1, limit2 = (int32_t)R32(R32(self + CHAR_SKELETON) + SKEL_BONES);
+    uint32_t bit = 1;
+    for (int32_t i = 0; i < (int32_t)P->nb; i++) {
+        while (i >= limit2) {
+            if (!P->mask)
+                return i;
+            j2++;
+            uint32_t n = R16(R32(R32(self + CHAR_SKELETON) + SKEL_RANGES) + 4 * (uint32_t)j2 + 2);
+            if (P->mask & bit)
+                limit2 += (int16_t)n;
+            else
+                off2 -= (int16_t)n;
+            bit <<= 1;
+        }
+        int32_t src = i - off2;
+        float pw = RF32(POSW(fp, (uint32_t)i)), rw = RF32(ROTW(fp, (uint32_t)i));
+        uint32_t m = out + 0x40 * (uint32_t)i;
+        uint32_t brec = R32(self + CHAR_SKELETON) + 0x7c * (uint32_t)src + 0x24;
+        uint32_t p;
+        if (!(V(pw) == LX(F_ZERO))) {
+            p = POS(fp, (uint32_t)i);
+            if (i != 0 && V(pw) < LX(F_100)) {
+                SF(fp - FR_TMP, V(pw) * LX(F_HUNDREDTH) * LX(self + CHAR_SCALE));
+                game_callm(c, VEC3_SCALE_BY, p, 1, fp - FR_TMP);
+            } else
+                game_callm(c, VEC3_SCALE_BY, p, 1, self + CHAR_SCALE);
+            game_callm(c, VEC3_ADD_TO, p, 1, R32(R32(self + CHAR_MODEL) + MODEL_BIND_POS) + 12 * (uint32_t)src);
+        } else
+            p = R32(R32(self + CHAR_MODEL) + MODEL_BIND_POS) + 12 * (uint32_t)src;
+        if (V(rw) > LX(F_ZERO)) {
+            if (V(rw) < LX(F_100) && i > (int32_t)R32(R32(self + CHAR_SKELETON) + SKEL_BONES)) {
+                copy16(fp - FR_QC, brec + BONE_BIND_QUAT);
+                game_callm(c, SLERP, ROT(fp, (uint32_t)i), 3, fp - FR_QC, ROT(fp, (uint32_t)i),
+                           FU((float)(V(rw) * LX(F_HUNDREDTH))));
+            }
+            game_callm(c, MAT4_FROM_QUAT, m, 2, ROT(fp, (uint32_t)i), p);
+        } else
+            game_callm(c, MAT4_FROM_ROT, m, 2, brec + BONE_BIND_ROT, p);
+        if (i == 0) {
+            SF(out + 0x34, LX(R32(self + CHAR_SKELETON) + SKEL_ROOT_Y) * LX(R32(self + CHAR_MODEL) + MODEL_ROOT_Y) + LX(out + 0x34));
+            SF(out + 0x34, LX(out + 0x34) - LX(R32(R32(self + CHAR_MODEL) + MODEL_BIND_POS) + 12 * (uint32_t)src + 4));
+            if (lean_beyond(self + CHAR_LEAN) || lean_beyond(self + CHAR_LEAN + 4) || lean_beyond(self + CHAR_LEAN + 8)) {
+                game_callm(c, MAT4_CTOR, fp - FR_R, 0);
+                game_callm(c, MAT4_IDENTITY, fp - FR_R, 0);
+                game_callm(c, MAT4_EULER, fp - FR_R, 3, 0, 0,
+                           FU((float)(LX(self + CHAR_LEAN) * LX(F_3_5) + LX(self + CHAR_LEAN + 8))));
+                game_callm(c, MAT4_MUL, out, 1, fp - FR_R);
+                game_callm(c, MAT4_EULER, out, 3, FU((float)-LX(self + CHAR_LEAN + 4)), 0, 0);
+            }
+            if (!(V(P->turn) == LX(F_ZERO)))
+                game_callm(c, MAT4_TURN, out, 1, FU(P->turn));
+            if (V(rw) == LX(F_ZERO))
+                for (uint32_t k = 0; k < 0x40; k += 8)
+                    SF(out + k, LX(out + k) * LX(F_MINUS1));
+            game_callm(c, MAT4_MUL, out, 1, self + CHAR_WORLD);
+            continue;
+        }
+        int32_t par = (int16_t)R16(brec + BONE_PARENT);
+        if (par >= (int32_t)R32(R32(self + CHAR_SKELETON) + SKEL_BONES))
+            par += off2;
+        uint32_t parent = out + 0x40 * (uint32_t)par;
+        if (pose_bone_adjust(c, P, (uint32_t)i, m, parent))
+            continue;
+        game_callm(c, MAT4_MUL, m, 1, parent);
+    }
+    return (int32_t)P->nb > 0 ? (int32_t)P->nb : 0;
+}
+
+/* 0x6cf798 (this = character; int bones, int mask, mat4 *out, 0, 0) (ret 0x14): the character's
+   pose at the current time of each of its playing animations: every channel's tracks (rotations
+   and positions per bone, from the key windows decoded to the channel's frame) blended by weight
+   into per-bone quaternions and positions (channels flagged 0x100 in a second pass, on top), the
+   hook told (2), then each bone's matrix built and placed on its parent's into out (bones' world
+   matrices, out[i] 0x40 apart; 0x6d0f2d turns them into skinning matrices). The original's last
+   two arguments are only slots it reuses for the weight arrays. It probes its 0x13e8-byte frame
+   with _chkstk (0x8aa8a0) first, a stack probe left out here. */
+static int dc_6cf798(CPU *c)
+{
+    uint32_t e = c->esp;
+    Pose P = {c->ecx, ARG(0), ARG(1), ARG(2), 0, 0, 0, 0, 0, 0};
+    uint32_t F = dc_frame(c, FR_SIZE + 4);
+    uint32_t fp = F + FR_SIZE, self = P.self;
+    P.fp = fp;
+    game_call(c, VEC_CTOR_ITER, 4, ROT(fp, 0), 16, 0x80, QUAT_CTOR_STUB);
+    game_call(c, VEC_CTOR_ITER, 4, POS(fp, 0), 12, 0x80, VEC3_CTOR_STUB);
+    for (int32_t i = 0; i < (int32_t)P.nb; i++) {
+        W32(ROTW(fp, (uint32_t)i), 0);
+        W32(POSW(fp, (uint32_t)i), 0);
+    }
+    for (int pass = 0; pass < 2; pass++) {
+        int defer = 0;
+        for (uint32_t ch = R32(self + CHAR_CHANNELS); ch; ch = R32(ch + CH_NEXT)) {
+            if (!R32(ch + CH_ANIM) || !R32(R32(ch + CH_ANIM) + ANIM_TRACKS))
+                continue;
+            if (pass == 0) {
+                if ((int16_t)R16(R32(ch + CH_ANIM) + ANIM_FLAGS) & 0x100) {
+                    defer = 1;
+                    continue;
+                }
+            } else if (!((int16_t)R16(R32(ch + CH_ANIM) + ANIM_FLAGS) & 0x100))
+                continue;
+            pose_channel(c, &P, pass, ch);
+        }
+        if (!defer)
+            break;
+    }
+    if (R32(self + CHAR_HOOK)) {
+        game_call(c, R32(self + CHAR_HOOK), 3, 2, self, ROT(fp, 0));
+        FPOP();
+    }
+    if (V(P.rc) > LX(F_ZERO)) {
+        P.lean = (float)(V(P.rc) * LX(F_0_65));
+        P.rc = (float)(V(P.rc) * LX(F_0_35));
+        if (V(P.rc) > LX(F_20)) {
+            P.lean = (float)(V(P.rc) - LX(F_20) + V(P.lean));
+            P.rc = 20.0f;
+        }
+    } else {
+        P.lean = (float)(V(P.rc) * LX(F_HALF));
+        P.rc = (float)(V(P.rc) * LX(F_HALF));
+        if (V(P.rc) < LX(F_M30)) {
+            P.lean = (float)(V(P.lean) - (V(P.rc) + LX(F_30)));
+            P.rc = -30.0f;
+        }
+    }
+    uint32_t eax = (uint32_t)pose_matrices(c, &P);    /* the original leaves its bone counter */
+    dc_unframe(c, F, FR_SIZE + 4);
+    return decomp_ret(c, e, eax, 5);
+}
+DECOMP(6cf798, dc_6cf798);
