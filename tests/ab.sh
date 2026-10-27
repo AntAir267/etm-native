@@ -36,7 +36,7 @@ flock 9
 run() {    # run <a|b> <ETM_DECOMP_OFF value or empty>
     local u="$out/user_$1"
     rm -rf "$u"; mkdir -p "$u"
-    ETM_KEYS="$keys" ETM_DECOMP_OFF="$2" timeout -s KILL 900 ./build/etm --test --user "$u" --hidden \
+    ETM_KEYS="$keys" ETM_DECOMP_OFF="${2:-$ETM_DECOMP_OFF}" timeout -s KILL 900 ./build/etm --test --user "$u" --hidden \
         --frames "$frames" --hash "$out/hash_$1.txt" --hash-every "$every" "${extra[@]}" > "$out/log_$1.txt" 2>&1 || true
 }
 # the translation's identity: the generated code, the runtime outside runtime/decomp/ and the
