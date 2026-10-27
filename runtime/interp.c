@@ -11,20 +11,21 @@
 #include "interp.h"
 
 #define MAXF 4096
-typedef struct { uint32_t addr; int kind; float prev[16], cur[16]; int have; unsigned long step; } Field;
+typedef struct { uint32_t addr; int kind; float prev[16], cur[16]; int have; unsigned long step; uint32_t group; } Field;
 static Field fields[MAXF];
 static int nfields;
 static unsigned long step_no;
 static int applied;
 float interp_jump = 50.0f;                       /* a move longer than this in a step is a jump */
+float interp_turn = 0;
 
 static int kind_floats(int kind)
 {
     switch (kind) {
     case IK_VEC3: case IK_KEEP3: return 3;
-    case IK_QUAT: return 4;
+    case IK_QUAT: case IK_VEC4: return 4;
     case IK_MAT43: case IK_MAT34: return 12;
-    case IK_MAT44: case IK_KEEP16: return 16;
+    case IK_MAT44: case IK_KEEP16: case IK_MAT44R: case IK_MAT44N: return 16;
     }
     return 1;
 }
@@ -61,10 +62,12 @@ static Field *field_of(uint32_t addr, int kind)
 }
 
 /* after a step: each field the lists name, copied (the previous copy kept) */
-void interp_track(uint32_t addr, int kind)
+void interp_track(uint32_t addr, int kind) { interp_track_group(addr, kind, 0); }
+void interp_track_group(uint32_t addr, int kind, uint32_t group)
 {
     Field *f = field_of(addr, kind);
     if (!f) return;
+    f->group = group;
     int n = kind_floats(kind);
     if (f->have && f->step == step_no - 1) memcpy(f->prev, f->cur, 4u * (uint32_t)n);
     else f->have = 0;
@@ -90,6 +93,13 @@ static float lerp(float a, float b, float t) { return a + (b - a) * t; }
 static int jumped(const Field *f)
 {
     float dx, dy, dz;
+    if (interp_turn > 0 && (f->kind == IK_MAT43 || f->kind == IK_MAT44 || f->kind == IK_MAT34 ||
+                            f->kind == IK_MAT44R)) {
+        int n = f->kind == IK_MAT43 ? 9 : 12;             /* the rows before the translation; */
+        for (int k = 0; k < n; k++)                       /* MAT34's translation column skipped */
+            if (!(f->kind == IK_MAT34 && k % 4 == 3) && fabsf(f->cur[k] - f->prev[k]) > interp_turn)
+                return 1;
+    }
     if (f->kind == IK_VEC3 || f->kind == IK_MAT43 || f->kind == IK_MAT44) {
         int o = f->kind == IK_VEC3 ? 0 : f->kind == IK_MAT43 ? 9 : 12;   /* the translation */
         dx = f->cur[o] - f->prev[o], dy = f->cur[o + 1] - f->prev[o + 1], dz = f->cur[o + 2] - f->prev[o + 2];
@@ -107,9 +117,18 @@ void interp_apply(double t)
     if (applied) return;
     applied = 1;
     float u = (float)(t < 0 ? 0 : t > 1 ? 1 : t);
+    uint32_t cut[64];                                   /* groups with a jump this step */
+    int ncut = 0;
+    for (int i = 0; i < nfields; i++)
+        if (fields[i].group && fields[i].step == step_no && jumped(&fields[i]) && ncut < 64)
+            cut[ncut++] = fields[i].group;
     for (int i = 0; i < nfields; i++) {
         Field *f = &fields[i];
         if (f->step != step_no || jumped(f) || f->kind == IK_KEEP3 || f->kind == IK_KEEP16) continue;
+        int in_cut = 0;
+        for (int k = 0; k < ncut && f->group; k++)
+            in_cut |= cut[k] == f->group;
+        if (in_cut) continue;
         int n = kind_floats(f->kind);
         float v[16];
         if (f->kind == IK_QUAT) {                       /* normalised lerp, the short way round */

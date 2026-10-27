@@ -226,6 +226,32 @@ anything drawn from rewritten buffers at 60).
   SetVertexShaderConstantF (376 draws with c0..c13 set: skinned characters [guess: from the
   counts]), 8,502 SetTextureStageState, 4,882 SetRenderState, 40 DrawPrimitiveUP (2D), 3 render
   targets.
+- Built (2026-10-26): the frame (0x646e8b) and its update count (0x6469f1) rewritten as C
+  (runtime/decomp/frame.c; identical on tests/ab.sh, first try). Option frame_rate = 60 (the
+  game's own pacing, default) | uncapped: in game a frame's updates follow the clock (0..4, the
+  fraction carried), decided once a frame at the input poll (0x7b5333, hooked: skipped before a
+  frame without updates, so input is read once per update and no "pressed" is lost) or at the
+  update count; the measured rate the game divides 60 by is set to 60 / the frame's updates
+  (1e9 with none: 0x71c1d5 and its 0x712c84 / 0x70f002 count 0); the frame end's timer read
+  (0x677a90 from 0x7c0915, hooked) gives one update's step already passed, so it doesn't wait, and
+  its cut-scene advance (0x7c1b30, hooked) restarts the timer instead. The render pass is blended
+  by the previous frame's carry (interp_apply before it, interp_restore after; fields copied after
+  each update: runtime/interp_game.c), which keeps the drawn time one update and one frame behind
+  the clock at a constant distance. Front-end frames and in-game frames that stop before the
+  updates keep the game's own wait.
+- Under --test the game's own pacing runs 2-3 updates a frame in game (the virtual clock's reads
+  make each frame a little over 1/60 s, so the frame end picks 1/30 or 1/20): the A/B route
+  covers frames with several updates. main.c sched(): with frame_rate = uncapped, scripted keys,
+  --hash checkpoints, --dump-memory and --frames count the game's own frames (a free frame counts
+  its updates), so runs at different drawn rates meet the same input on the same update.
+- tests/rate.sh: the lobby route uncapped at 60 a second (one update a frame, the design) and at
+  120 (from frame 2300, just into the game: the route's menu keys are timed for the default test
+  clock), memory compared at an update. First result (update 4500, before the input fix): the game
+  state (camera, actors) the same; differing only frame counters (0x97ec48, 0x97ff54), frame-rate
+  statistics (0x97ff48, 0x931f5c), the frame timer, the input update's frame counter 0x97bb30
+  (0x5f648c, called per poll: fixed by skipping the poll), the world's per-frame dynamic lighting
+  (0x7a44a0 from 0x7475c8, alternating per frame: double-buffered vertex light records
+  [guess]), and the projection kept by the render pass (+0x94: the last mesh's far plane).
 - Plan: larush-native's design (runtime/interp.c): after each update, copy the fields that place
   what is drawn (actors' positions and orientations, skeleton poses, the camera's view record,
   particles); before the render pass blend them by the frame's place between the last two

@@ -9,6 +9,7 @@
    edi saved below them; the update count's out-argument at ebp-0x20), its ebp/esi/edi as callees
    see them (rep movsd leaves esi/edi past the copy), byte arguments pushed in a whole register
    whose upper bytes are the previous callee's. */
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include "decomp.h"
@@ -111,6 +112,7 @@ static int frame_free_updates;
 static int was_free;                /* the previous frame was */
 static double carry;                /* updates due, carried (0..1) */
 static double free_last_ms;
+static int advanced = -1;           /* this frame's updates once decided (free_advance), or -1 */
 double frame_blend;                 /* where the render pass draws between the last two updates */
 
 void frame_rate_reapply(void) { uncapped = -1; }
@@ -125,13 +127,21 @@ int frame_rate_uncapped(void)
 int frame_ticks_end(void)
 {
     int t = frame_free ? frame_free_updates : 1;
+    if (!frame_free && advanced > 0)
+        carry += advanced;                          /* (decided, not run: the time comes back) */
+    advanced = -1;
     was_free = frame_free;
     frame_free = 0;
     return t;
 }
 
-static uint32_t free_count(CPU *c, uint32_t out)
+/* the frame's updates by the clock, decided once a frame: at the input poll before it (so a frame
+   with none skips the poll: input is read once per update, as the game expects; a "pressed" seen
+   on a frame without updates would be gone before one ran) or at its update count */
+static int free_advance(void)
 {
+    if (advanced >= 0)
+        return advanced;
     double rate = RF32(DESIGN_RATE), due;
     double now = deterministic ? 0 : host_ms();
     if (!was_free)
@@ -142,19 +152,38 @@ static uint32_t free_count(CPU *c, uint32_t out)
     if (due < 0) due = 0;
     frame_blend = carry;
     carry += due;
-    uint32_t n = (uint32_t)carry;
+    int n = (int)carry;
     if (n > 4) {                                    /* (too slow: the time beyond is dropped) */
         n = 4;
         carry = 4;
     }
     carry -= n;
+    return advanced = n;
+}
+
+static uint32_t free_count(CPU *c, uint32_t out)
+{
+    double rate = RF32(DESIGN_RATE);
+    uint32_t n = (uint32_t)free_advance();
     W32(out, n);
     WF32(UPDATES_PER_FRAME, (float)n);
     W32(CARRY, 0);
     WF32(MEASURED_RATE, n ? (float)(rate / n) : 1e9f);
     frame_free = 1;
     frame_free_updates = (int)n;
+    static int logged;
+    if (!logged++)
+        LOG(LOG_ALWAYS, "frame_rate uncapped: frames in game drawn between updates (frame %lu)", frame_count);
     return n;
+}
+
+/* 0x7b5333, the input poll (the main loop's, before each frame): skipped before a free frame
+   without updates */
+static int input_poll(CPU *c)
+{
+    if (!frame_rate_uncapped() || !was_free || free_advance() > 0)
+        return 0;
+    return decomp_ret(c, c->esp, c->eax, 0);
 }
 
 /* the frame timer (0x677a90 reads it, 0x7c1b30 advances it by a step in cut scenes): in a free
@@ -179,6 +208,7 @@ void frame_install(void)
 {
     hook_timer_elapsed = timer_elapsed;
     hook_timer_advance = timer_advance;
+    hook_input_poll = input_poll;
 }
 
 /* 0x6469f1 (unused, out): the number of updates this frame: 60 / the target rate, one more for
@@ -338,6 +368,13 @@ static int dc_646e8b(CPU *c)
     for (uint32_t v = views; v; v = R32(v + VIEW_NEXT)) {
         copy_dwords(c, VIEW, v, VIEW_DWORDS);
         level = R32(VIEW + VIEW_LEVEL);
+        static int log_camera = -1;             /* ETM_LOG_CAMERA: each drawn frame's camera */
+        if (log_camera < 0)
+            log_camera = getenv("ETM_LOG_CAMERA") != NULL;
+        if (log_camera && v == views)
+            LOG(LOG_ALWAYS, "camera %lu: blend %.3f updates %d position %.3f %.3f %.3f", frame_count,
+                frame_free ? frame_blend : 1.0, frame_free ? frame_free_updates : (int)n,
+                RF32(VIEW + 0x2d4), RF32(VIEW + 0x2d8), RF32(VIEW + 0x2dc));
         c->ecx = VIEW;
         c->edx = level;
         game_call(c, PROFILE_MARK, 1, 0xffff00);
@@ -633,7 +670,9 @@ restart:
         copy_dwords(c, VIEW, v, VIEW_DWORDS);
         level = R32(VIEW + VIEW_LEVEL);
         game_call(c, PROFILE_MARK, 1, 0xffff00);
-        if (R32(level + LEVEL_WORLD))
+        /* (a free frame without updates skips it: it steps per-frame effects, 0x6e9415's counters,
+           and redoes the lighting for the same state; at 60 a second it runs once an update) */
+        if (R32(level + LEVEL_WORLD) && !(frame_free && !frame_free_updates))
             game_call(c, WORLD_POST, 1, R32(level + LEVEL_WORLD));
         copy_dwords(c, v, VIEW, VIEW_DWORDS);
     }

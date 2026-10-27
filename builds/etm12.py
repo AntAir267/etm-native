@@ -43,6 +43,9 @@ HOOKS = {
     # frame.c: with frames drawn between updates the frame end neither waits nor advances it
     0x677a90: 'timer_elapsed',
     0x7c1b30: 'timer_advance',
+    # the input poll (the main loop's, before each frame: devices read, current -> previous):
+    # frame.c skips it before a frame drawn between updates that runs none
+    0x7b5333: 'input_poll',
 }
 
 # the drawing code's functions, each hookable for its rewrite (runtime/decomp/, decomp.h DECOMP)
