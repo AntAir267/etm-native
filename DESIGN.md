@@ -82,6 +82,31 @@ the same relocations when it maps the file (runtime/main.c load_module).
 - Movie sound (.adx beside each .avi) is not CRI ADX: the game reads it with AIL_file_read and
   plays it as IMA ADPCM stereo (trans1.adx: 49,680 bytes = 44,850 frames at 44.1 kHz).
 
+### 5. Translator changes for this program
+- Discovery from relocations only (li2-native's change, applied to this repository from outside
+  this session at 18:11 on 2026-10-26 and kept): the aligned-dword scan of data took ASCII text
+  and round numbers for code; all 366 functions it dropped were bogus starts (0x402000,
+  0x474e45 "ENG", ...) [verified: lists compared].
+- Incremental-linking stubs: Matrix.exe reaches most functions through a one-jmp stub
+  (0x401000-0x409000). A function that is one jmp now makes its target a function of its own,
+  so functions keep their real addresses (as in Ghidra) and hooks go on the real address; the
+  stub is a tail jump (tools/discover.py). 9,094 -> 14,345 functions, the same instructions.
+
+### 6. The display (game.c, d3d9.c)
+- resolution (desktop by default; original; WxH) [verified: 1920x1080 frames]: hook on the
+  settings loader 0x7b85e0 sets 0x947f60/0x947f64 after MatrixConfig.ini. The 3D view is Hor+
+  by itself (0x6eaf9a keeps (4/3) / (width / height) for the projection).
+- ui (center by default; stretch): the 2D design is 640 x 448 replayed by the blit renderer
+  0x7a73db, x times [0x97eda0] = width / 640, y times height / 448. Before each replay the
+  command list is laid out for a centred 4:3 area (x scale height / 480); what spans the design
+  width (fades, the cutscenes' letterbox bars) spans the screen. The movie picture (0x7be3fb) is
+  pillarboxed through d3d9.c's screen-space draw hook (ui2d_layout). The HUD sits in the 4:3
+  area for now (corner anchoring needs a play/menu state: to do). Command formats in game.c.
+- d3d9.c: larush-native's game-specific changes removed (fog distances from a LA Rush address,
+  hemispheric ambient constants, UI squeezing keyed to LA Rush state, shader substitution on by
+  default, shadow filter); the calls reach DXVK as the game makes them. ETM_LOG_2D=1 logs every
+  screen-space draw with its caller and extent.
+
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/etm12.py; first translator run; Miles
   stand-in, ReadFileEx; first runs: the intro movies (Atari, Warner Bros., Shiny) play through
@@ -95,3 +120,6 @@ the same relocations when it maps the file (runtime/main.c load_module).
   (frames, from a fresh test user): 1200 RETURN (English), 1400 DOWN, 1430 RETURN (New Game),
   1700 RETURN (Normal), 2000 ESCAPE (skip the cinematic), 2200 RETURN (Ghost), 3200 RETURN
   (skip the intro scene), 4000 RETURN (save: Yes), 4300/4600 RETURN; in the lobby by ~4700.
+- 2026-10-26: resolution and widescreen: desktop size by default, Hor+ 3D, 2D kept 4:3 and
+  centred, full-width fades and bars, pillarboxed movies [verified: 1080p frames of the title,
+  a cinematic, character select, the in-engine intro and the lobby].

@@ -25,6 +25,13 @@ MEM_OVERRIDES = {}
 
 # Functions the runtime may hook (hook_<name>, run at the function's entry; returns 1 if it did
 # the call itself).
-HOOKS = {}
+HOOKS = {
+    # the settings loader (MatrixConfig.ini, [RENDERING] RESOLUTION 0-6 -> width, height at
+    # 0x947f60, 0x947f64; anything else 640x480): game.c sets the size option resolution asks for
+    0x7b85e0: 'settings_load',
+    # the 2D renderer (the blit command list at [0x92ed64], [0x979bcc] bytes, replayed once a
+    # frame: menus, text, HUD): game.c lays the list out for the screen's shape first
+    0x7a73db: 'blit_draw',
+}
 
 CONSTS = {}

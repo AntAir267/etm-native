@@ -333,6 +333,15 @@ class Discovery:
                         continue
                     f = self.traverse(e, known)
                     funcs[e] = f
+                    # an incremental-linking stub (a function that is one jmp): its target is a
+                    # function of its own, so it keeps its own address (as in Ghidra) and the stub
+                    # becomes a tail jump
+                    i0 = self.dec.at(e)
+                    if i0 is not None and i0.mn == 'jmp' and i0.ops[0][0] == 'i':
+                        t = i0.ops[0][1]
+                        if t not in known and t not in self.not_entries and self.dec.in_text(t):
+                            known.add(t)
+                            new.append(t)
                     for t in f.calls:
                         if t not in known and t not in self.not_entries:
                             known.add(t)

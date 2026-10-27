@@ -77,8 +77,9 @@ static int joy_button(int b)
 extern int game_driving(void);
 static uint8_t menu_key_down[256];
 
-/* the front end: the game's state is not a race (0x38, the pause menu included) */
-static int front_end(void) { return R32(0x8d0980) != 0x38; }
+/* the front end (menus) as against play: game.c */
+extern int game_front_end(void);
+static int front_end(void) { return game_front_end(); }
 
 static void menu_key(int dik, int down)
 {

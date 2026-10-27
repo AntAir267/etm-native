@@ -363,9 +363,8 @@ API(D3D9, Direct3DCreate9, 1)
         {
             static char conf[160];
             int an = atoi(option_str("anisotropic", "16"));
-            int sf = atoi(option_str("shadow_filter", "7"));
+            int sf = 0;
             if (an != 2 && an != 4 && an != 8 && an != 16) an = -1;
-            if (sf != 3 && sf != 5 && sf != 7) sf = 0;
             /* (a hidden window, --hidden, is never shown: presenting without waiting for the
                screen keeps a compositor that never draws it from holding the frame up) */
             snprintf(conf, sizeof conf, "d3d9.samplerAnisotropy = %d; d3d9.shadowFilter = %d;%s", an, sf,
@@ -544,8 +543,8 @@ HOSTFN(sp_IDirect3DDevice9_GetNPatchMode, 1)
 }
 
 /* ------------------------------------------------------------------ shader substitution */
-/* Option shaders = original (the default) | improved. The game's shaders are fixed bytecode from
-   vshaders.pak / pshaders.pak. With improved, a shader whose bytecode's FNV-1a 64 hash names a
+/* Option shaders = original (the default) | improved (larush-native's mechanism, kept: Enter
+   the Matrix has no replacements yet, data/shaders is empty). With improved, a shader whose bytecode's FNV-1a 64 hash names a
    replacement in data/shaders/ (<hash>.vsh / .psh, shader assembly; tools/d3dasm.py assembles them
    at build time into gen/shaders_gen.c) is created from ours instead; the program gets the object
    as before (its shader table holds whatever CreateVertexShader returns), so nothing above the
@@ -560,7 +559,7 @@ static int shaders_improved(void)
 {
     static int improved = -1;
     if (improved < 0)
-        improved = !strcasecmp(option_str("shaders", "improved"), "improved");
+        improved = !strcasecmp(option_str("shaders", "original"), "improved");
     return improved;
 }
 
@@ -633,260 +632,137 @@ HOSTFN(sp_IDirect3DDevice9_CreatePixelShader, 3)
     return r;
 }
 
-/* ------------------------------------------------------------------ 2D at other screen shapes */
-/* The game draws its menus, text and HUD as quads already in screen space (-1..1, from a 640x480
-   layout) through a vertex shader whose c12-c15 matrix is then the identity. At a screen that is
-   not 4:3 those stretch; option ui = center (the default) draws a copy of each such quad laid out
-   in a centred 4:3 area, except that corners on the screen's edge stay there: backdrops, the menus'
-   bands, fades and movies keep filling the screen, text and pictures keep their shape. Not in a
-   race: its HUD is in pixels, already in shape, and stays at the screen's edges (game.c fixes
-   its text's width). ui = stretch is the game's own. */
-static int ui_center = -1;
-static float ui_sx = 1, ui_sy = 1;          /* the 4:3 area's share of the screen */
-static float vs_c12[16];                    /* the program's c12-c15 */
-static int vs_c12_identity;
-static uint32_t ss0_vb, ss0_off, ss0_stride; /* stream 0: program object, offset, stride */
-
-static void ui_screen(uint32_t w, uint32_t h)
-{
-    if (ui_center < 0)
-        ui_center = strcasecmp(option_str("ui", "center"), "stretch") != 0;
-    ui_sx = ui_sy = 1;
-    if (!ui_center || !w || !h)
-        return;
-    float a = (float)w / (float)h;
-    if (a > 4.0f / 3.0f + 0.01f)
-        ui_sx = (4.0f / 3.0f) / a;
-    else if (a < 4.0f / 3.0f - 0.01f)
-        ui_sy = a / (4.0f / 3.0f);
-}
+/* ------------------------------------------------------------------ pass-throughs
+   (larush-native changed these for LA Rush: UI squeezing, fog distances, lighting constants;
+   Enter the Matrix's calls reach DXVK as made) */
+static void ui_screen(uint32_t w, uint32_t h) { (void)w; (void)h; }
 
 HOSTFN(sp_IDirect3DDevice9_SetStreamSource, 5)
 {
     void *self = d3d_host(ARG(0));
-    if (ARG(1) == 0) {
-        ss0_vb = ARG(2);
-        ss0_off = ARG(3);
-        ss0_stride = ARG(4);
-    }
     return (uint32_t)((HRESULT (*)(void *, UINT, void *, UINT, UINT))VT(self)[100])(
         self, (UINT)ARG(1), (void *)d3d_host_or_null(ARG(2)), (UINT)ARG(3), (UINT)ARG(4));
-}
-
-/* HEMISPHERIC AMBIENT for the world (shaders = improved; data/shaders, DESIGN.md 2026-10-26).
-   The game lights everything with one flat ambient colour, c35 (the mode record's colour 2; also
-   pixel constant 6, the ground's), plus the sun c34 along c32. The replaced world shaders take
-   instead an ambient that depends on the surface's facing: sky above, a bounce from the ground
-   below, amb(n) = mid + n.y x half, with
-     sky    = c35 x kS x the fog colour's hue (the mode's own sky, record +0x70, the game's
-              current fog colour at 0x6afc14, its brightness divided out, half strength)
-     ground = c35 x kG + c34 x max(c32.y, 0) x kB (the sunlit street's bounce)
-     mid = (sky + ground) / 2 -> vertex c100, half = (sky - ground) / 2 -> vertex c101
-   (no game shader reads c96-c159 but the bones' c93 and the shaders' own defs c109/c110). The
-   cars' per-pixel paint (ps 0x3e/0x3f) and plain lit parts (vs 0x3b) get the same shape scaled
-   to their own ambient c62 (0.6 x c35 by day) and kC: pixel c8 and vertex c102 = c62 x mid / c35
-   x kC, pixel c9 and vertex c103 = c62 x half / c35 x kC (no game pixel shader reads c8, c9).
-   kS, kG, kB and kC depend on option sun (original 1.08, 0.55, 0.2, 1: about the original's
-   brightness; true 1.55, 0.35, 0.3, 1.6): the true sun lights level ground at 30 degrees where the
-   original's lit it from 81, its long shadows put more of the street in shade, which the sky must
-   light, and the cars are often backlit. Neutral (mid = c35, half = 0: the original's ambient exactly) at night (the
-   mode record's +0x9c) and whenever c35 is not the mode's colour (the HUD's grey pass, the front
-   end's scenes). Set as the program sets c32, c34, c35 or c62, beneath its calls (the draw
-   stream and game memory are the same). */
-#define HEMI_MODE       0x8fdc0c    /* the game mode (view.c) */
-#define HEMI_RECORDS    0x8fd260    /* + mode x 0xa8: +0x38 colour 2 (RRGGBBAA), +0x9c night */
-#define HEMI_FOG        0x6afc14    /* the fog colour last set (0x53f5e0: ARGB) */
-static float hemi_c32[4], hemi_c34[4], hemi_c35[4], hemi_c62[4];
-static float hemi_mid[3] = {1, 1, 1}, hemi_half[3];     /* per channel, as factors of c35 */
-static float hemi_kcar = 1;                             /* the cars' share, on top */
-
-static void hemi_cars(void *self)
-{
-    float p[8] = {0};
-    for (int i = 0; i < 3; i++) {
-        p[i] = hemi_c62[i] * hemi_mid[i] * hemi_kcar;
-        p[4 + i] = hemi_c62[i] * hemi_half[i] * hemi_kcar;
-    }
-    p[3] = hemi_c62[3];
-    ((HRESULT (*)(void *, UINT, const float *, UINT))VT(self)[109])(self, 8, p, 2);
-    ((HRESULT (*)(void *, UINT, const float *, UINT))VT(self)[94])(self, 102, p, 2);
-}
-
-static void hemi_update(void *self)
-{
-    uint32_t mode = R32(HEMI_MODE), rec = HEMI_RECORDS + (mode < 6 ? mode : 0) * 0xa8;
-    uint32_t col = R32(rec + 0x38);
-    int neutral = mode >= 6 || R32(rec + 0x9c) != 0;
-    for (int i = 0; i < 3 && !neutral; i++)
-        if (fabsf(hemi_c35[i] - (float)((col >> (24 - 8 * i)) & 0xff) / 256.0f) > 1e-6f)
-            neutral = 1;
-    float sky[3], gnd[3], mid[4] = {0}, half[4] = {0};
-    if (neutral) {
-        for (int i = 0; i < 3; i++)
-            hemi_mid[i] = 1, hemi_half[i] = 0;
-        hemi_kcar = 1;
-    } else {
-        const int t = option_sun_true();
-        const float kS = t ? 1.55f : 1.08f, kG = t ? 0.35f : 0.55f, kB = t ? 0.30f : 0.20f;
-        hemi_kcar = t ? 1.60f : 1.0f;
-        uint32_t fog = R32(HEMI_FOG);
-        float f[3] = {(float)(fog >> 16 & 0xff) / 255.0f, (float)(fog >> 8 & 0xff) / 255.0f,
-                      (float)(fog & 0xff) / 255.0f};
-        float lum = 0.3f * f[0] + 0.59f * f[1] + 0.11f * f[2];
-        float up = hemi_c32[1] > 0 ? hemi_c32[1] : 0;
-        for (int i = 0; i < 3; i++) {
-            float hue = lum > 0.02f ? f[i] / lum : 1.0f;
-            hue = hue < 0.5f ? 0.5f : hue > 1.6f ? 1.6f : hue;
-            sky[i] = hemi_c35[i] * kS * (1.0f + (hue - 1.0f) * 0.5f);
-            gnd[i] = hemi_c35[i] * kG + hemi_c34[i] * up * kB;
-            float a = hemi_c35[i] > 1e-4f ? hemi_c35[i] : 1e-4f;
-            hemi_mid[i] = (sky[i] + gnd[i]) * 0.5f / a;
-            hemi_half[i] = (sky[i] - gnd[i]) * 0.5f / a;
-        }
-    }
-    for (int i = 0; i < 3; i++) {
-        mid[i] = hemi_c35[i] * hemi_mid[i];
-        half[i] = hemi_c35[i] * hemi_half[i];
-    }
-    mid[3] = hemi_c35[3];
-    float m[8] = {mid[0], mid[1], mid[2], mid[3], half[0], half[1], half[2], half[3]};
-    ((HRESULT (*)(void *, UINT, const float *, UINT))VT(self)[94])(self, 100, m, 2);
-    hemi_cars(self);
 }
 
 HOSTFN(sp_IDirect3DDevice9_SetVertexShaderConstantF, 4)
 {
     void *self = d3d_host(ARG(0));
-    uint32_t start = ARG(1), n = ARG(3);
-    const float *v = (const float *)gptr(ARG(2));
-    if (start < 16 && start + n > 12) {
-        for (uint32_t i = start; i < start + n; i++)
-            if (i >= 12 && i < 16)
-                memcpy(&vs_c12[(i - 12) * 4], v + (i - start) * 4, 16);
-        static const float id[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-        vs_c12_identity = !memcmp(vs_c12, id, sizeof id);
-    }
-    uint32_t rr = (uint32_t)((HRESULT (*)(void *, UINT, const float *, UINT))VT(self)[94])(self, start, v, n);
-    /* With shaders = improved the per-pixel car shaders (data/shaders: ps 0x3e, 0x3f) need some
-       of the vertex shaders' constants, which a pixel shader cannot read: each is copied, as the
-       program sets it, into a pixel shader constant no game shader reads (c24-c31; the game's
-       ps_2_0 shaders read at most c22, ps_1_1 c0-c7). The program's own calls are unchanged. */
-    if (shaders_improved() && start <= 92 && start + n > 32) {
-        static const uint8_t from[8] = {32, 37, 58, 61, 62, 90, 91, 92};   /* -> c24-c31 */
-        for (int k = 0; k < 8; k++)
-            if (from[k] >= start && from[k] < start + n)
-                ((HRESULT (*)(void *, UINT, const float *, UINT))VT(self)[109])(self, 24 + k, v + (from[k] - start) * 4, 1);
-    }
-    /* the hemispheric ambient (above) follows c32, c34, c35 and the cars' c62 */
-    if (shaders_improved() && start <= 62 && start + n > 32) {
-        int world = 0, cars = 0;
-        static float *const keep[4] = {hemi_c32, hemi_c34, hemi_c35, hemi_c62};
-        static const uint8_t reg[4] = {32, 34, 35, 62};
-        for (int k = 0; k < 4; k++)
-            if (reg[k] >= start && reg[k] < start + n) {
-                memcpy(keep[k], v + (reg[k] - start) * 4, 16);
-                if (k < 3) world = 1; else cars = 1;
-            }
-        if (world)
-            hemi_update(self);
-        else if (cars)
-            hemi_cars(self);
-    }
-    return rr;
-}
-
-/* DRAW DISTANCE: what the game shows ends at its linear table fog's end (FOGSTART 1), which the
-   device setup picks from VIEW DISTANCE (0x6efc9c: 2000, 3000, 4000; the city's geometry reaches
-   much further) and a device reset puts back to 3000 whatever the setting (0x540cf5). Option
-   draw_distance (original 1, far 2, max 4) multiplies the setting's end, on every setting of it
-   (game.c scales the cars' and the city's level-of-detail distances to match).
-   FOG: the game's starts at 1, so everything is fogged in proportion to its distance (a car 400
-   away 10 % at end 4000). Option fog = haze moves FOGSTART to a quarter of the end: the near
-   field clear, the haze thickening to the same full fog at the end (where the cars and the
-   city's meshes stop), in the game's colour. Both are set with every FOGSTART or FOGEND the game
-   sets (device setup, reset), from the setting, so they hold whatever it changes. */
-static double draw_distance = -1;
-static int fog_haze = -1;
-#define HAZE_START 0.25f
-
-static float fog_end(void)
-{
-    if (draw_distance < 0) {
-        draw_distance = option_draw_distance();
-        const char *f = option_str("fog", "haze");
-        fog_haze = !strcasecmp(f, "haze");
-        LOG(LOG_ALWAYS, "draw distance x%g, fog %s", draw_distance, fog_haze ? "haze" : "original");
-    }
-    static const float ends[3] = {2000, 3000, 4000};
-    uint32_t v = R32(0x6efc9c);
-    return ends[v < 3 ? v : 2] * (float)draw_distance;
+    return (uint32_t)((HRESULT (*)(void *, UINT, const float *, UINT))VT(self)[94])(
+        self, ARG(1), (const float *)gptr(ARG(2)), ARG(3));
 }
 
 HOSTFN(sp_IDirect3DDevice9_SetRenderState, 3)
 {
     void *self = d3d_host(ARG(0));
     uint32_t state = ARG(1), value = ARG(2);
-    HRESULT (*set)(void *, D3DRENDERSTATETYPE, DWORD) = (HRESULT (*)(void *, D3DRENDERSTATETYPE, DWORD))VT(self)[57];
-    if (state == D3DRS_FOGEND || state == D3DRS_FOGSTART) {
-        float end = fog_end();
-        if (state == D3DRS_FOGEND) {
-            memcpy(&value, &end, 4);
-            if (fog_haze) {             /* (the game sets FOGSTART first: it follows this end) */
-                float start = end * HAZE_START;
-                DWORD sv;
-                memcpy(&sv, &start, 4);
-                set(self, D3DRS_FOGSTART, sv);
-            }
-        } else if (fog_haze) {
-            float start = end * HAZE_START;
-            memcpy(&value, &start, 4);
-        }
-    }
     if (state == D3DRS_MULTISAMPLEANTIALIAS)
         value = msaa_render_state(state, value);
-    return (uint32_t)set(self, (D3DRENDERSTATETYPE)state, value);
-}
-
-/* one coordinate into the centred area; on the screen's edge it stays */
-static float ui_map(float x, float s)
-{
-    if (x <= -0.99f && x >= -1.01f) return -1;
-    if (x >= 0.99f && x <= 1.01f) return 1;
-    return x * s;
+    return (uint32_t)((HRESULT (*)(void *, D3DRENDERSTATETYPE, DWORD))VT(self)[57])(self, (D3DRENDERSTATETYPE)state, value);
 }
 
 HOSTFN(sp_IDirect3DDevice9_DrawPrimitive, 4)
 {
     void *self = d3d_host(ARG(0));
-    uint32_t prim = ARG(1), first = ARG(2), count = ARG(3);
-    HRESULT (*draw)(void *, D3DPRIMITIVETYPE, UINT, UINT) = (HRESULT (*)(void *, D3DPRIMITIVETYPE, UINT, UINT))VT(self)[81];
-    /* (in a race, screen 0x38, the HUD is laid out in pixels and is drawn as is: game.c) */
-    if ((ui_sx < 1 || ui_sy < 1) && vs_c12_identity && ss0_vb && ss0_stride >= 12 && ss0_stride <= 64 &&
-        R32(0x8d0980) != 0x38 &&
-        (prim == D3DPT_TRIANGLEFAN || prim == D3DPT_TRIANGLESTRIP || prim == D3DPT_TRIANGLELIST)) {
-        Ent *e = ent_of_guest(ss0_vb);
-        uint32_t nv = prim == D3DPT_TRIANGLELIST ? count * 3 : count + 2;
-        uint32_t at = ss0_off + first * ss0_stride;
-        static uint8_t copy[256 * 64];
-        if (e && e->shadow && nv <= 256 && at + nv * ss0_stride <= e->size) {
-            memcpy(copy, gptr(e->shadow + at), nv * ss0_stride);
-            for (uint32_t i = 0; i < nv; i++) {
-                float *xy = (float *)(copy + i * ss0_stride);
-                xy[0] = ui_map(xy[0], ui_sx);
-                xy[1] = ui_map(xy[1], ui_sy);
-            }
-            HRESULT r = ((HRESULT (*)(void *, D3DPRIMITIVETYPE, UINT, const void *, UINT))VT(self)[83])(
-                self, (D3DPRIMITIVETYPE)prim, count, copy, ss0_stride);
-            /* a drawing from memory unsets stream 0: the program's comes back */
-            ((HRESULT (*)(void *, UINT, void *, UINT, UINT))VT(self)[100])(
-                self, 0, (void *)d3d_host_or_null(ss0_vb), ss0_off, ss0_stride);
-            return (uint32_t)r;
-        }
-    }
-    return (uint32_t)draw(self, (D3DPRIMITIVETYPE)prim, first, count);
+    return (uint32_t)((HRESULT (*)(void *, D3DPRIMITIVETYPE, UINT, UINT))VT(self)[81])(
+        self, (D3DPRIMITIVETYPE)ARG(1), ARG(2), ARG(3));
 }
 
-/* ------------------------------------------------------------------ IDirect3DSwapChain9 */
+/* ------------------------------------------------------------------ screen-space draws
+   Vertices with a pre-transformed position (FVF XYZRHW) drawn from memory are the game's 2D:
+   menus, text, HUD, movies, fades and full-screen effects. game.c (ui2d_layout) is asked, with
+   the caller and the x range, for a scale and offset of x (the game lays its 2D out for 4:3,
+   stretched to the width); ETM_LOG_2D=1 logs each such draw. */
+static uint32_t cur_fvf;               /* 0 while a vertex declaration is in use */
+
+HOSTFN(sp_IDirect3DDevice9_SetFVF, 2)
+{
+    void *self = d3d_host(ARG(0));
+    cur_fvf = ARG(1);
+    return (uint32_t)((HRESULT (*)(void *, DWORD))VT(self)[89])(self, (DWORD)ARG(1));
+}
+
+HOSTFN(sp_IDirect3DDevice9_SetVertexDeclaration, 2)
+{
+    void *self = d3d_host(ARG(0));
+    cur_fvf = 0;
+    return (uint32_t)((HRESULT (*)(void *, void *))VT(self)[87])(self, (void *)d3d_host_or_null(ARG(1)));
+}
+
+extern int ui2d_layout(uint32_t caller, float minx, float maxx, float miny, float maxy, float *scale, float *offset);
+
+static uint32_t prim_vertices(uint32_t prim, uint32_t count)
+{
+    switch (prim) {
+    case D3DPT_POINTLIST: return count;
+    case D3DPT_LINELIST: return count * 2;
+    case D3DPT_LINESTRIP: return count + 1;
+    case D3DPT_TRIANGLELIST: return count * 3;
+    default: return count + 2;          /* strip, fan */
+    }
+}
+
+/* the copy to draw instead (NULL: draw the program's own) */
+static const void *ui2d_vertices(CPU *c, uint32_t data, uint32_t nv, uint32_t stride)
+{
+    static int log2d = -1;
+    if (log2d < 0)
+        log2d = getenv("ETM_LOG_2D") != NULL;
+    if ((cur_fvf & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW || !data || stride < 16 || !nv || nv > 65536)
+        return NULL;
+    const uint8_t *src = (const uint8_t *)gptr(data);
+    float minx = 1e30f, maxx = -1e30f, miny = 1e30f, maxy = -1e30f;
+    for (uint32_t i = 0; i < nv; i++) {
+        const float *v = (const float *)(src + i * stride);
+        if (v[0] < minx) minx = v[0];
+        if (v[0] > maxx) maxx = v[0];
+        if (v[1] < miny) miny = v[1];
+        if (v[1] > maxy) maxy = v[1];
+    }
+    uint32_t caller = R32(c->esp);
+    float sc = 1, off = 0;
+    int t = ui2d_layout(caller, minx, maxx, miny, maxy, &sc, &off);
+    if (log2d)
+        LOG(LOG_ALWAYS, "2d: frame %lu caller %08x fvf %x %u vertices x %.1f..%.1f y %.1f..%.1f%s", frame_count, caller,
+            cur_fvf, nv, minx, maxx, miny, maxy, t ? " (laid out)" : "");
+    if (!t)
+        return NULL;
+    static uint8_t *buf;
+    static size_t cap;
+    if ((size_t)nv * stride > cap) {
+        cap = (size_t)nv * stride * 2;
+        buf = realloc(buf, cap);
+    }
+    memcpy(buf, src, (size_t)nv * stride);
+    for (uint32_t i = 0; i < nv; i++) {
+        float *v = (float *)(buf + i * stride);
+        v[0] = v[0] * sc + off;
+    }
+    return buf;
+}
+
+HOSTFN(sp_IDirect3DDevice9_DrawPrimitiveUP, 5)
+{
+    void *self = d3d_host(ARG(0));
+    const void *data = ui2d_vertices(c, ARG(3), prim_vertices(ARG(1), ARG(2)), ARG(4));
+    if (!data)
+        data = (const void *)(uintptr_t)ARG(3);
+    return (uint32_t)((HRESULT (*)(void *, D3DPRIMITIVETYPE, UINT, const void *, UINT))VT(self)[83])(
+        self, (D3DPRIMITIVETYPE)ARG(1), (UINT)ARG(2), data, (UINT)ARG(4));
+}
+
+/* (prim, min index, vertices, count, indices, index format, vertex data, stride) */
+HOSTFN(sp_IDirect3DDevice9_DrawIndexedPrimitiveUP, 9)
+{
+    void *self = d3d_host(ARG(0));
+    uint32_t nv = ARG(2) + ARG(3), stride = ARG(8);       /* (the vertices from index 0 up) */
+    const void *data = ui2d_vertices(c, ARG(7), nv, stride);
+    if (!data)
+        data = (const void *)(uintptr_t)ARG(7);
+    return (uint32_t)((HRESULT (*)(void *, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void *, D3DFORMAT, const void *, UINT))VT(self)[84])(
+        self, (D3DPRIMITIVETYPE)ARG(1), (UINT)ARG(2), (UINT)ARG(3), (UINT)ARG(4), (const void *)(uintptr_t)ARG(5),
+        (D3DFORMAT)ARG(6), data, stride);
+}
+
 HOSTFN(sp_IDirect3DSwapChain9_Present, 6)
 {
     void *self = d3d_host(ARG(0));
