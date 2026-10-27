@@ -202,6 +202,38 @@ anything drawn from rewritten buffers at 60).
 - Batches: world (0x747b66, 0x6ea603, 0x646c33's and 0x6f309c's small subtrees), characters
   (0x6d0f2d's subtree), object submission (0x6f309c, 0x6f2732, 0x7b0aa8, 0x6f3ec5).
 
+### 9b. Interpolation: the frame loop (groundwork, 2026-10-26)
+- Update count [verified: disassembly of 0x6469f1, constants read from the exe]: updates this
+  frame = carry + [0x97ec5c], where [0x97ec5c] = 60 / [0x97ec60] (the target rate: 60, or 30
+  when 0x643ef7's flag is set; 50 / 25 in the PAL mode [0x97ec50] == 0, where [0x97ec54] = 1.2),
+  plus one update per step the measured rate [0x97ec6c] (1 / the frame end's quantized step,
+  0x7c0b5b) falls short, up to 5. The carry [0x97ec64] keeps the fraction, snapped to 0 below
+  0.01 and to 1 above 0.99. At NTSC rates the carry is always 0. Second output ([ebp-0x20] of
+  0x646e8b): updates that run 0x646367 (normally all).
+- 0x646e8b [verified: disassembly]: the render pass runs first, once per view in the list
+  [0x97f230] (next at +0x4f0): the view (0x5cc bytes) is copied to 0x97f234, its matrix +0x54 to
+  +0x94 and 0x97f474 to 0x97f4b4, then drawn (world 0x747b66, objects 0x6f309c, the mode's
+  +0xcc, 0x646c33, then 0x646cec / 0x646c9e if [0x97f800]+0x1b4) and [0x97ef30](view, 1, n x
+  [0x97f570]) gets the frame's simulated time; the copy goes back. Then the n updates run
+  ([0x97ec68] = 1..n), the last preparing the next frame's views. So a frame shows the state the
+  previous frame's updates left, whatever n is; with n = 0 it would draw the same state again.
+- Readers of the measured rate [0x97ec6c]: 0x6465c8 (min / max statistics), 0x646e8b (a log line
+  every 32 frames), 0x70f002 and 0x712c84 (60 / rate as a frame's update count: these assume
+  whole updates per frame), 0x706bcf, 0x728aa0 (log), 0x7bfd39 (sets it at loads), 0x78afa9
+  (resets it to 60). Drawing between updates must keep these seeing whole updates per frame.
+- One lobby frame's Direct3D calls (ETM_LOG_FRAME=6800, work/frame6800): 1,458
+  DrawIndexedPrimitive, 1,452 SetTransform (world, props: fixed function), 4,136
+  SetVertexShaderConstantF (376 draws with c0..c13 set: skinned characters [guess: from the
+  counts]), 8,502 SetTextureStageState, 4,882 SetRenderState, 40 DrawPrimitiveUP (2D), 3 render
+  targets.
+- Plan: larush-native's design (runtime/interp.c): after each update, copy the fields that place
+  what is drawn (actors' positions and orientations, skeleton poses, the camera's view record,
+  particles); before the render pass blend them by the frame's place between the last two
+  updates; after it put the latest back, so the simulation never sees a blended value. The
+  in-game frame then runs at the screen's rate with 0 or more updates (real-time accumulator in
+  place of 0x6469f1's count), the front end staying at one update a frame. The rewrite's reports
+  name the fields.
+
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/etm12.py; first translator run; Miles
   stand-in, ReadFileEx; first runs: the intro movies (Atari, Warner Bros., Shiny) play through
