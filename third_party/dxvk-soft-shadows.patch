@@ -1,0 +1,229 @@
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+index 9b72bb2..fd4520c 100644
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -7887,6 +7887,7 @@ namespace dxvk {
+     m_shaderOptions.d3d9FloatEmulation = m_d3d9Options.d3d9FloatEmulation;
+     m_shaderOptions.isSWVP = CanSWVP();
+     m_shaderOptions.forceSamplerTypeSpecConstants = m_d3d9Options.forceSamplerTypeSpecConstants;
++    m_shaderOptions.shadowFilter = uint8_t(std::clamp(m_d3d9Options.shadowFilter, 0, 7));
+   }
+ 
+ 
+diff --git a/src/d3d9/d3d9_options.cpp b/src/d3d9/d3d9_options.cpp
+index e46864e..de72b87 100644
+--- a/src/d3d9/d3d9_options.cpp
++++ b/src/d3d9/d3d9_options.cpp
+@@ -50,6 +50,7 @@ namespace dxvk {
+     this->lenientClear                  = config.getOption<bool>        ("d3d9.lenientClear",                  false);
+     this->deferSurfaceCreation          = config.getOption<bool>        ("d3d9.deferSurfaceCreation",          false);
+     this->samplerAnisotropy             = config.getOption<int32_t>     ("d3d9.samplerAnisotropy",             -1);
++    this->shadowFilter                  = config.getOption<int32_t>     ("d3d9.shadowFilter",                  0);
+     this->maxAvailableMemory            = config.getOption<int32_t>     ("d3d9.maxAvailableMemory",            4096);
+     this->supportCubeDepthFormats       = config.getOption<bool>        ("d3d9.supportCubeDepthFormats",       false);
+     this->supportDFFormats              = config.getOption<bool>        ("d3d9.supportDFFormats",              true);
+diff --git a/src/d3d9/d3d9_options.h b/src/d3d9/d3d9_options.h
+index e69a39a..6340528 100644
+--- a/src/d3d9/d3d9_options.h
++++ b/src/d3d9/d3d9_options.h
+@@ -64,6 +64,10 @@ namespace dxvk {
+     /// given anisotropy value for all samplers.
+     int32_t samplerAnisotropy;
+ 
++    /// Shadow-map (depth-compare) sampling filtered over this many texels square:
++    /// 3, 5 or 7; anything else leaves the hardware's single 2x2 sample
++    int32_t shadowFilter;
++
+     /// Max available memory override
+     ///
+     /// Changes the max initial value used in
+diff --git a/src/d3d9/d3d9_shader.cpp b/src/d3d9/d3d9_shader.cpp
+index e0f77eb..64717c8 100644
+--- a/src/d3d9/d3d9_shader.cpp
++++ b/src/d3d9/d3d9_shader.cpp
+@@ -1118,6 +1118,7 @@ namespace dxvk {
+       options.fastFloatEmulation = m_options.d3d9FloatEmulation == D3D9FloatEmulation::Enabled;
+       options.isSWVP = m_options.isSWVP && isVs;
+       options.forceDynamicTextureType = m_options.forceSamplerTypeSpecConstants && !isVs;
++      options.shadowFilter = m_options.shadowFilter;
+ 
+       dxbc_spv::util::ByteReader reader(m_dxbc.data(), m_dxbc.size());
+ 
+diff --git a/src/d3d9/d3d9_shader.h b/src/d3d9/d3d9_shader.h
+index 8428df1..1ed8636 100644
+--- a/src/d3d9/d3d9_shader.h
++++ b/src/d3d9/d3d9_shader.h
+@@ -34,9 +34,13 @@ namespace dxvk {
+      * Works around a game bug in Halo CE where it gives cube textures to 2d/volume samplers
+      */
+     bool forceSamplerTypeSpecConstants;
++
++    /** Shadow-map sampling filter size (3, 5, 7; else none): part of the
++     *  shader key, so cached shaders follow a change */
++    uint8_t shadowFilter;
+   };
+ 
+-  static_assert(sizeof(D3D9ShaderOptions) == 3u);
++  static_assert(sizeof(D3D9ShaderOptions) == 4u);
+ 
+   struct D3D9ShaderCreateInfo {
+     DxvkIrShaderCreateInfo irCreateInfo;
+diff --git a/subprojects/dxbc-spirv/sm3/sm3_converter.h b/subprojects/dxbc-spirv/sm3/sm3_converter.h
+index 19f8a7e..d196d13 100644
+--- a/subprojects/dxbc-spirv/sm3/sm3_converter.h
++++ b/subprojects/dxbc-spirv/sm3/sm3_converter.h
+@@ -46,6 +46,11 @@ public:
+      *  texture type rather than the shader declaration in Shader Model 2
+      *  and 3 content. Must only be enabled for pixel shaders. */
+     bool forceDynamicTextureType = false;
++    /** Depth-compare (shadow map) sampling of 2D textures in pixel shaders
++     *  filtered over this many texels square (3, 5 or 7), made of hardware
++     *  2x2 comparison samples weighted so the result moves smoothly with the
++     *  coordinate; anything else leaves the single hardware sample. */
++    uint32_t shadowFilter = 0u;
+   };
+ 
+   Converter(util::ByteReader code, const Options& options);
+diff --git a/subprojects/dxbc-spirv/sm3/sm3_resources.cpp b/subprojects/dxbc-spirv/sm3/sm3_resources.cpp
+index af1c591..b87c528 100644
+--- a/subprojects/dxbc-spirv/sm3/sm3_resources.cpp
++++ b/subprojects/dxbc-spirv/sm3/sm3_resources.cpp
+@@ -772,14 +772,115 @@ void ResourceMap::emitSampleDref(
+     sizedDy = buildVector(builder, ir::ScalarType::eF32, texCoordComponentCount, dyComponents.data());
+   }
+ 
+-  auto drefResult = builder.add(ir::Op::ImageSample(ir::ScalarType::eF32,
+-    descriptor, sampler, ir::SsaDef(), sizedTexCoord, ir::SsaDef(),
+-    lod, lodBias, ir::SsaDef(), sizedDx, sizedDy, reference));
++  uint32_t filterSize = m_converter.getOptions().shadowFilter;
++  bool filtered = (filterSize == 3u || filterSize == 5u || filterSize == 7u)
++    && textureType == SamplerStateType::eTexture2D
++    && m_converter.getShaderInfo().getType() == ShaderType::ePixel;
++
++  auto drefResult = filtered
++    ? emitSampleDrefFiltered(builder, sizedTexCoord, reference, descriptor, sampler, lod, filterSize)
++    : builder.add(ir::Op::ImageSample(ir::ScalarType::eF32,
++        descriptor, sampler, ir::SsaDef(), sizedTexCoord, ir::SsaDef(),
++        lod, lodBias, ir::SsaDef(), sizedDx, sizedDy, reference));
+   drefResult = broadcastScalar(builder, drefResult, WriteMask(ComponentBit::eAll));
+   builder.add(ir::Op::Return(ir::BasicType(ir::ScalarType::eF32, 4u), drefResult));
+ }
+ 
+ 
++ir::SsaDef ResourceMap::emitSampleDrefFiltered(
++        ir::Builder&      builder,
++        ir::SsaDef        texCoord,
++        ir::SsaDef        reference,
++        ir::SsaDef        descriptor,
++        ir::SsaDef        sampler,
++        ir::SsaDef        lod,
++        uint32_t          filterSize) {
++  /* Smooth percentage-closer filtering from bilinear comparison samples
++   * (I. Castano's, as in The Witness): the coordinate in texels is split
++   * at the nearest texel corner, and each axis gets filterSize / 2 + 1
++   * sample positions and weights from the fraction s past that corner,
++   * placed so the bilinear weights add up to a kernel filterSize texels
++   * wide that slides with the coordinate (no steps at texel edges). */
++  auto f32 = ir::ScalarType::eF32;
++  auto c = [&] (float v) { return builder.makeConstant(v); };
++  auto add = [&] (ir::SsaDef a, ir::SsaDef b) { return builder.add(ir::Op::FAdd(f32, a, b)); };
++  auto sub = [&] (ir::SsaDef a, ir::SsaDef b) { return builder.add(ir::Op::FSub(f32, a, b)); };
++  auto mul = [&] (ir::SsaDef a, ir::SsaDef b) { return builder.add(ir::Op::FMul(f32, a, b)); };
++  auto div = [&] (ir::SsaDef a, ir::SsaDef b) { return builder.add(ir::Op::FDiv(f32, a, b)); };
++
++  auto sizeType = ir::Type()
++    .addStructMember(ir::ScalarType::eU32, 2u)  /* size   */
++    .addStructMember(ir::ScalarType::eU32);     /* layers */
++  auto sizeStruct = builder.add(ir::Op::ImageQuerySize(sizeType, descriptor, builder.makeConstant(0u)));
++  auto sizeF = builder.add(ir::Op::ConvertItoF(ir::BasicType(f32, 2u), ir::extractFromVector(builder, sizeStruct, 0u)));
++
++  struct Axis { ir::SsaDef size, base; std::array<ir::SsaDef, 4u> w, u; } axes[2];
++
++  for (uint32_t i = 0u; i < 2u; i++) {
++    Axis& a = axes[i];
++    a.size = ir::extractFromVector(builder, sizeF, i);
++
++    auto t = mul(ir::extractFromVector(builder, texCoord, i), a.size);
++    auto corner = builder.add(ir::Op::FRound(f32, add(t, c(0.5f)), ir::RoundMode::eNegativeInf));
++    auto s = sub(add(t, c(0.5f)), corner);
++    a.base = sub(corner, c(0.5f));        /* (in texels: the centre left of the corner) */
++
++    switch (filterSize) {
++      case 3u:
++        a.w[0] = sub(c(3.0f), mul(c(2.0f), s));
++        a.w[1] = add(c(1.0f), mul(c(2.0f), s));
++        a.u[0] = sub(div(sub(c(2.0f), s), a.w[0]), c(1.0f));
++        a.u[1] = add(div(s, a.w[1]), c(1.0f));
++        break;
++      case 5u:
++        a.w[0] = sub(c(4.0f), mul(c(3.0f), s));
++        a.w[1] = c(7.0f);
++        a.w[2] = add(c(1.0f), mul(c(3.0f), s));
++        a.u[0] = sub(div(sub(c(3.0f), mul(c(2.0f), s)), a.w[0]), c(2.0f));
++        a.u[1] = div(add(c(3.0f), s), c(7.0f));
++        a.u[2] = add(div(s, a.w[2]), c(2.0f));
++        break;
++      default: /* 7 (all four weights negative: their products are not) */
++        a.w[0] = sub(mul(c(5.0f), s), c(6.0f));
++        a.w[1] = sub(mul(c(11.0f), s), c(28.0f));
++        a.w[2] = sub(mul(c(-11.0f), s), c(17.0f));
++        a.w[3] = sub(mul(c(-5.0f), s), c(1.0f));
++        a.u[0] = sub(div(sub(mul(c(4.0f), s), c(5.0f)), a.w[0]), c(3.0f));
++        a.u[1] = sub(div(sub(mul(c(4.0f), s), c(16.0f)), a.w[1]), c(1.0f));
++        a.u[2] = add(div(sub(mul(c(-7.0f), s), c(5.0f)), a.w[2]), c(1.0f));
++        a.u[3] = sub(c(3.0f), div(s, a.w[3]));
++        break;
++    }
++  }
++
++  uint32_t taps = filterSize / 2u + 1u;
++  float total = filterSize == 3u ? 16.0f : filterSize == 5u ? 144.0f : 2704.0f;
++
++  /* One mip only matters here: explicit LOD 0 unless one was given */
++  if (!lod)
++    lod = c(0.0f);
++
++  auto sum = ir::SsaDef();
++
++  for (uint32_t j = 0u; j < taps; j++) {
++    for (uint32_t i = 0u; i < taps; i++) {
++      std::array<ir::SsaDef, 2u> coord = {
++        div(add(axes[0].base, axes[0].u[i]), axes[0].size),
++        div(add(axes[1].base, axes[1].u[j]), axes[1].size) };
++
++      auto sample = builder.add(ir::Op::ImageSample(f32, descriptor, sampler,
++        ir::SsaDef(), buildVector(builder, f32, 2u, coord.data()), ir::SsaDef(),
++        lod, ir::SsaDef(), ir::SsaDef(), ir::SsaDef(), ir::SsaDef(), reference));
++
++      auto term = mul(mul(axes[0].w[i], axes[1].w[j]), sample);
++      sum = sum ? add(sum, term) : term;
++    }
++  }
++
++  return mul(sum, c(1.0f / total));
++}
++
++
+ ir::SsaDef ResourceMap::emitSamplerState(ir::Builder& builder) {
+   /* Declare sampler state with the maximum number of samplers that
+    * the current shader stage can declare. This will be lowered to
+diff --git a/subprojects/dxbc-spirv/sm3/sm3_resources.h b/subprojects/dxbc-spirv/sm3/sm3_resources.h
+index d3c8550..5a3f84f 100644
+--- a/subprojects/dxbc-spirv/sm3/sm3_resources.h
++++ b/subprojects/dxbc-spirv/sm3/sm3_resources.h
+@@ -173,6 +173,15 @@ private:
+           ir::SsaDef        dx,
+           ir::SsaDef        dy);
+ 
++  ir::SsaDef emitSampleDrefFiltered(
++          ir::Builder&      builder,
++          ir::SsaDef        texCoord,
++          ir::SsaDef        reference,
++          ir::SsaDef        descriptor,
++          ir::SsaDef        sampler,
++          ir::SsaDef        lod,
++          uint32_t          filterSize);
++
+   ir::SsaDef emitSamplerState(ir::Builder& builder);
+ 
+   ir::SsaDef loadSamplerState(
