@@ -587,7 +587,8 @@ void api_trace(CPU *c)
         fflush(tracefp);
 }
 
-/* FRAME LIMIT (Enhanced; options.txt frame_limit = off | screen | <fps>; not in test runs): a frame
+/* FRAME LIMIT (Enhanced; options.txt frame_limit = off | screen | <fps>; not in test runs; with
+   frame_rate = uncapped, off means screen): a frame
    waits for its time before the game goes on (its input read after the wait, so what the next frame
    shows is as fresh as it can be). "screen" is 3 under the screen's refresh: with variable refresh
    (G-Sync, FreeSync) frames then stay inside the range the screen follows, never waiting for vsync.
@@ -612,6 +613,9 @@ static void frame_limit(void)
     if (!limit_read) {
         const char *v = option_str("frame_limit", "off");
         int fps = !strcasecmp(v, "screen") ? frame_limit_screen() : atoi(v);
+        extern int frame_rate_uncapped(void);
+        if (fps < 10 && frame_rate_uncapped())      /* (frames between updates: the screen's rate) */
+            fps = frame_limit_screen();
         limit_ms = fps >= 10 ? 1000.0 / fps : 0;
         limit_read = 1;
         if (fps >= 10)

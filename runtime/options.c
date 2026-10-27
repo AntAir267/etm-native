@@ -136,6 +136,9 @@ static const char *const help[][2] = {
     {"antialiasing", "antialiasing: off, 2x, 4x or 8x (multisampling)"},
     {"rumble", "rumble: on or off (controller vibration)"},
     {"frame_limit", "frame_limit: off (the game's own pacing: up to 60 a second, the Xbox version's rate), screen (3 under the screen's refresh) or a rate (30 = the repack's cap)"},
+    {"frame_rate", "frame_rate: 60 (the default: the game's own, one frame per 60 Hz update) or uncapped (in game, frames "
+                   "drawn between updates with what moves blended, at the screen's rate (3 under it) or frame_limit's; "
+                   "the game itself still runs 60 updates a second)"},
     {"resolution", "resolution: desktop (the default: the screen's size), original (MatrixConfig.ini's RESOLUTION, "
                    "0-6 = 640x480 .. 2048x1536) or WxH"},
     {"anisotropic", "anisotropic: 16, 8, 4, 2 or off (texture filtering)"},
