@@ -674,6 +674,8 @@ void game_frame(unsigned long frame);   /* game.c */
 void frame_presented(void)
 {
     frame_count++;
+    extern void watch_frame_tick(void);
+    watch_frame_tick();                 /* ETM_WATCH (watch.c) */
     extern void det_yield(void);
     det_yield();                        /* --test: the other threads' turn (sync.c) */
     pokes();

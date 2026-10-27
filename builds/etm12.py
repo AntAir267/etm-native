@@ -35,6 +35,16 @@ HOOKS = {
     # the projection matrix made (m, width, height, focal, far, aspect factor) and handed to the
     # device (0x7a2df4): game.c zooms in-engine scenes on wide screens
     0x62a236: 'projection',
+    # stack leftovers (runtime/decomp/stackfix.c): frames cleared on entry in both modes, for the
+    # bytes the original copies into game memory without writing them first
+    0x64a2e9: 'sf_64a2e9',
 }
+
+# the drawing code's functions, each hookable for its rewrite (runtime/decomp/, decomp.h DECOMP)
+import os as _os
+for _l in open(_os.path.join(_os.path.dirname(__file__), 'decomp_funcs.txt')):
+    _l = _l.split('#')[0].strip()
+    if _l:
+        HOOKS.setdefault(int(_l, 16), 'dc_%x' % int(_l, 16))
 
 CONSTS = {}

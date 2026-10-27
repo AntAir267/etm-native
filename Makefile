@@ -18,8 +18,11 @@ LDFLAGS = -rdynamic -L$(SDL3)/lib -Wl,-rpath,'$$ORIGIN/lib' -lSDL3 -pthread -lm 
 
 RT_SRC = $(wildcard runtime/*.c) gen/d3d9_gen.c
 DXVK_INC = -I$(DXVK)/include/dxvk
+# the drawing code's rewrites (runtime/decomp/, DESIGN.md)
+DC_SRC = $(wildcard runtime/decomp/*.c)
 RT_OBJ = $(patsubst runtime/%.c,build/obj/rt_%.o,$(filter runtime/%,$(RT_SRC))) build/obj/rt_d3d9_gen.o \
-         build/obj/rt_shaders_gen.o
+         build/obj/rt_shaders_gen.o \
+         $(patsubst runtime/decomp/%.c,build/obj/dc_%.o,$(DC_SRC))
 # The code files recomp.py wrote, listed in gen/files.mk once it has run.
 -include gen/files.mk
 GEN_SRC = $(GEN_CODE) gen/table.c gen/stubs.c
@@ -29,7 +32,7 @@ all: build/etm build/lib/libSDL3.so.0 build/lib/libdxvk_d3d9.so.0
 
 # (the translator's own scripts: other tools/ changes don't regenerate)
 RECOMP_PY = $(wildcard $(addprefix tools/,recomp.py codegen.py discover.py image.py pe.py fpustack.py simd.py x86.py))
-gen/funcs.h: $(RECOMP_PY) $(BUILD_CFG)
+gen/funcs.h: $(RECOMP_PY) $(BUILD_CFG) builds/decomp_funcs.txt
 	$(PY) tools/recomp.py $(GAME) $(BUILD_CFG) gen
 gen/table.c gen/stubs.c: gen/funcs.h ;
 gen/files.mk: gen/funcs.h
@@ -38,8 +41,12 @@ gen/files.mk: gen/funcs.h
 build/obj/gen_%.o: gen/%.c gen/funcs.h runtime/cpu.h | build/obj
 	$(CC) $(CFLAGS_GEN) -c $< -o $@
 
-build/obj/rt_%.o: runtime/%.c runtime/*.h gen/funcs.h | build/obj
+build/obj/rt_%.o: runtime/%.c runtime/*.h runtime/decomp/decomp.h gen/funcs.h | build/obj
 	$(CC) $(CFLAGS_RT) -c $< -o $@
+
+# (-ffp-contract=off: no fused multiply-adds, so each operation rounds as the original's does)
+build/obj/dc_%.o: runtime/decomp/%.c runtime/decomp/*.h runtime/*.h gen/funcs.h | build/obj
+	$(CC) $(CFLAGS_RT) -ffp-contract=off -c $< -o $@
 
 # the Direct3D 9 bridge: DXVK's headers for the types, wrappers generated from its d3d9.h
 gen/d3d9_gen.c gen/d3d9_gen.h: tools/d3d9gen.py $(DXVK)/include/dxvk/d3d9.h

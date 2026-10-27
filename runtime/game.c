@@ -461,6 +461,9 @@ void frame_rate_reapply(void) {}
 
 void game_init(void)
 {
+    extern void decomp_install(void), stackfix_install(void);
+    decomp_install();                   /* the drawing code's rewrites (runtime/decomp/) */
+    stackfix_install();                 /* frames cleared in both modes (runtime/decomp/stackfix.c) */
     resolution_choose();
     hook_settings_load = hook_settings_load_fn;
     hook_blit_draw = hook_blit_draw_fn;
