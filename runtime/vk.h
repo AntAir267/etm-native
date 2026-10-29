@@ -1,9 +1,9 @@
-/* OUR OWN VULKAN RENDERER (option renderer = vulkan; VULKAN.md). Phase 1: the Direct3D 9 the game
-   uses, implemented in C as host COM objects with Direct3D's vtables, so everything that called
-   DXVK's objects (the generated wrappers, d3d9.c, the passes in d3d9_msaa.c / _post.c / _ao.c, the
-   shots) calls ours unchanged. vk_core.c: Vulkan itself (instance, device, memory, frames, uploads,
-   pipelines, samplers, the bindless set, the swapchain); vk_d3d9.c: the Direct3D objects and the
-   device's state, draws and passes. */
+/* OUR OWN VULKAN RENDERER (option renderer = vulkan; VULKAN.md). The Direct3D 9 the game uses,
+   implemented in C as host COM objects with Direct3D's vtables, so everything that called DXVK's
+   objects (the generated wrappers, d3d9.c, d3d9_msaa.c, the shots) calls ours unchanged. vk_core.c:
+   Vulkan itself (instance, device, memory, frames, uploads, pipelines, samplers, the bindless set,
+   the swapchain); vk_d3d9.c: the Direct3D objects and the device's state, draws and passes, with
+   Direct3D's fixed function (runtime/shaders/ff.vert, ff.frag). From larush-native (2026-10-29). */
 #pragma once
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>

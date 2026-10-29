@@ -1,9 +1,9 @@
 // Our own Vulkan renderer (VULKAN.md 2.3): Direct3D 9's fixed-function vertex processing as one
 // uber-shader, compiled to SPIR-V at build time (glslangValidator, the Makefile) and specialized per
-// pipeline: every path is chosen by specialization constants from the state key (runtime/vk_ff.c
+// pipeline: every path is chosen by specialization constants from the state key (runtime/vk_d3d9.c
 // ff_key_vs), so the driver drops what a draw does not use. The per-draw values (matrices, lights,
 // material, viewport, point size) are a block in the frame's constants ring (set 1 binding 0, the
-// vertex shader constants' first chunk; vk_ff.c ff_data_vs).
+// vertex shader constants' first chunk; vk_d3d9.c ff_data_vs).
 //
 // ALTERED SOURCE: adapted from DXVK 3.1.1's src/d3d9/shaders/d3d9_fixed_function_vert.vert and
 // d3d9_fixed_function_common.glsl (the parity reference: our pictures are compared with DXVK's), the
@@ -116,7 +116,7 @@ const uint DXVK_TSS_TCI_PASSTHRU = 0u, DXVK_TSS_TCI_CAMERASPACENORMAL = 1u, DXVK
 spirv_instruction(set = "GLSL.std.450", id = 79) float spvNMin(float, float);
 spirv_instruction(set = "GLSL.std.450", id = 81) float spvNClamp(float, float, float);
 
-// ---------------------------------------------------------------- the per-draw block (vk_ff.c FFVsData)
+// ---------------------------------------------------------------- the per-draw block (vk_d3d9.c FFVsData)
 struct Light {
     vec4 Diffuse;
     vec4 Specular;

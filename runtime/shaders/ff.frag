@@ -1,9 +1,9 @@
 // Our own Vulkan renderer (VULKAN.md 2.3): Direct3D 9's fixed-function texture stages as one
 // uber-shader, compiled to SPIR-V at build time (glslangValidator, the Makefile) and specialized per
 // pipeline: the stages' operations and arguments, the samplers' kinds, projection, the alpha test, fog
-// and the specular add are specialization constants from the state key (runtime/vk_ff.c ff_key_ps),
+// and the specular add are specialization constants from the state key (runtime/vk_d3d9.c ff_key_ps),
 // so the driver keeps only the paths a draw uses. The texture factor, stage constants and bump
-// matrices are in the pixel constants block (set 1 binding 1, after the extra block; vk_ff.c
+// matrices are in the pixel constants block (set 1 binding 1, after the extra block; vk_d3d9.c
 // ff_data_ps); textures and samplers are the bindless set's, their indices in the push constants as
 // for the programmable pixel shaders (tools/d3d2spv.py).
 //

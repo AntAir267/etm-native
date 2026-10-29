@@ -1,21 +1,26 @@
-/* Our own Vulkan renderer: the Direct3D 9 the game uses (VULKAN.md "Interface"), as host COM objects
-   with Direct3D's vtables, so the generated wrappers, d3d9.c, the passes (d3d9_msaa.c, _post.c,
-   _ao.c) and the shots call these exactly as they called DXVK's.
-   - IDirect3D9: the answers DXVK 3.1.1 gives (its caps, dumped on the Win Max: ETM_DUMP_CAPS; its
-     adapter identity), so the game takes the same paths under both renderers.
+/* Our own Vulkan renderer: the Direct3D 9 the game uses (VULKAN.md 2.1), as host COM objects with
+   Direct3D's vtables, so the generated wrappers, d3d9.c, d3d9_msaa.c and the shots call these exactly
+   as they called DXVK's. Brought over from larush-native's renderer (its round 4, 2026-10-28) on
+   2026-10-29; its native passes (bloom, AO) left out, Enter the Matrix has none.
+   - IDirect3D9: the answers DXVK 3.1.1 gives (its caps, adapter identity, format and multisample
+     checks, mode list: ETM_DUMP_CAPS compares them), so the game takes the same paths under both
+     renderers and its memory stays the same.
    - Resources: textures and cube textures (one image each, every level and face a surface object
      sharing the texture's references), standalone surfaces (render targets, depth buffers, the back
      buffer, system-memory surfaces), vertex and index buffers (ranges of large host-visible
-     buffers, a host copy for locks; written in place, or into a new range when draws recorded since
-     still read the old bytes), declarations, shaders (their SPIR-V from gen/spirv_gen.c by the
+     buffers, the program's own copy as the host copy for locks: d3d9.c vk_buf_host; written in place,
+     or into a new range when draws recorded since still read the old bytes), declarations (SetFVF's
+     made from the FVF as DXVK makes them), shaders (their SPIR-V from gen/spirv_gen.c by the
      bytecode's hash), state blocks.
-   - The device: Direct3D's state; at a draw, the pipeline for the state (cached), dynamic state,
-     the constants into the frame's ring, the textures' and samplers' bindless indices as push
-     constants; render passes begun at the first drawing or clear after the targets change and ended
-     when they change (dynamic rendering), copies and resolves between them; every image in the
-     GENERAL layout, a full barrier between passes [simple first; VULKAN.md "Render passes"].
-   Not here yet: queries, depth StretchRect (the AO's INTZ copy), the shadow filter, mipmap
-   generation, volume textures, fixed-function drawing (the game has none). */
+   - The device: Direct3D's state; at a draw, the pipeline for the state (cached, listed on disk and
+     made again at the start), dynamic state, the constants into the frame's ring, the textures' and
+     samplers' bindless indices as push constants; render passes begun at the first drawing or clear
+     after the targets change and ended when they change (dynamic rendering), copies and resolves
+     between them, barriers by need.
+   - Fixed function (VULKAN.md 2.3; the game draws everything so): two uber-shaders specialized by a
+     state key ("fixed function" below).
+   Not here yet: vertex blending, clip planes, flat shading, depth StretchRect, mipmap generation,
+   volume textures, gamma ramps (VULKAN.md 4). */
 #define _GNU_SOURCE
 #include <SDL3/SDL.h>
 #include <math.h>
@@ -641,7 +646,10 @@ static int tex_image(VkTex *t)
     /* every image lives in GENERAL (VULKAN.md "Render passes"): there from the start */
     end_pass();
     VkCommandBuffer cb = vk_cmd();
-    vk_image_layout(cb, t->image, aspect | (t->stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0), VK_IMAGE_LAYOUT_UNDEFINED,
+    /* (a depth format without stencil may sit in a depth/stencil Vulkan format, D24X8 on AMD's
+       D32_SFLOAT_S8_UINT: the layout covers both aspects of such an image) */
+    int vk_stencil = t->vkfmt == VK_FORMAT_D24_UNORM_S8_UINT || t->vkfmt == VK_FORMAT_D32_SFLOAT_S8_UINT;
+    vk_image_layout(cb, t->image, aspect | (vk_stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0), VK_IMAGE_LAYOUT_UNDEFINED,
                     VK_IMAGE_LAYOUT_GENERAL, t->faces);
     if (t->samples <= 1) {
         t->slot = vk_tex_slot();
