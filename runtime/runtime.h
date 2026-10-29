@@ -197,6 +197,10 @@ void devrec_upload(uint32_t addr, uint32_t len);
 extern uint64_t draw_hash;
 void draw_hash_call(CPU *c, const char *method);
 void draw_hash_bytes(const void *p, size_t n);
+/* the Direct3D inventory (d3d9_inv.c, ETM_D3D_INV): every program call to Direct3D counted */
+extern int d3dinv_on;
+void d3dinv_call(CPU *c, const char *name);
+void d3dinv_after(CPU *c);
 
 /* windows / input / display shared state */
 void win_init(void);
