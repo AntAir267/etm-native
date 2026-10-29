@@ -4028,31 +4028,59 @@ static int desktop_mode(D3DDISPLAYMODE *m)
     return 1;
 }
 
+/* the display's modes as DXVK 3.1.1 lists them (d3d9_adapter.cpp CacheModes, its SDL3 WSI), so the
+   game sees the same list under both renderers (its memory and choices the same): the first display
+   SDL lists, modes of the format's bits per pixel (X8R8G8B8 32, R5G6B5 16: none on today's screens),
+   the refresh rate truncated to whole hertz, exact duplicates dropped (SDL can list a mode twice:
+   VULKAN.md 1), sorted by width, height, then refresh rate highest first */
+static int modes_of(D3DFORMAT f, D3DDISPLAYMODE *out, int max)
+{
+    int bpp = f == D3DFMT_X8R8G8B8 || f == D3DFMT_A8R8G8B8 ? 32 : f == D3DFMT_R5G6B5 || f == D3DFMT_X1R5G5B5 ? 16 :
+              f == D3DFMT_A2R10G10B10 ? 32 : 0;
+    if (!bpp) return 0;
+    int nd = 0, n = 0, k = 0;
+    SDL_DisplayID *ds = SDL_GetDisplays(&nd);
+    SDL_DisplayMode **m = ds && nd > 0 ? SDL_GetFullscreenDisplayModes(ds[0], &n) : NULL;
+    SDL_free(ds);
+    for (int i = 0; m && i < n && k < max; i++) {
+        int b = SDL_BITSPERPIXEL(m[i]->format);
+        b = b <= 8 ? 8 : b <= 16 ? 16 : 32;     /* (DXVK: a power of two, as Windows counts padding) */
+        if (b != bpp) continue;
+        UINT rr = m[i]->refresh_rate_numerator ? (UINT)m[i]->refresh_rate_numerator / (UINT)m[i]->refresh_rate_denominator :
+                  m[i]->refresh_rate > 0 ? (UINT)(m[i]->refresh_rate * 1000.0f) / 1000 : 60;
+        D3DDISPLAYMODE d = {(UINT)m[i]->w, (UINT)m[i]->h, rr, f};
+        int dup = 0;
+        for (int j = 0; j < k; j++) dup |= !memcmp(&out[j], &d, sizeof d);
+        if (!dup) out[k++] = d;
+    }
+    SDL_free(m);
+    for (int i = 1; i < k; i++)                 /* (insertion sort: a few dozen) */
+        for (int j = i; j > 0; j--) {
+            D3DDISPLAYMODE *a = &out[j - 1], *b = &out[j];
+            int after = a->Width > b->Width || (a->Width == b->Width && (a->Height > b->Height ||
+                        (a->Height == b->Height && a->RefreshRate < b->RefreshRate)));
+            if (!after) break;
+            D3DDISPLAYMODE t = *a; *a = *b; *b = t;
+        }
+    return k;
+}
+
 static UINT d3d9_GetAdapterModeCount(void *This, UINT a, D3DFORMAT f)
 {
     (void)This;
-    if (a || (f != D3DFMT_X8R8G8B8 && f != D3DFMT_R5G6B5)) return 0;
-    int n = 0;
-    SDL_DisplayMode **m = SDL_GetFullscreenDisplayModes(SDL_GetPrimaryDisplay(), &n);
-    SDL_free(m);
-    return n > 0 ? (UINT)n : 1;
+    if (a) return 0;
+    D3DDISPLAYMODE m[256];
+    return (UINT)modes_of(f, m, 256);
 }
 
 static HRESULT d3d9_EnumAdapterModes(void *This, UINT a, D3DFORMAT f, UINT i, D3DDISPLAYMODE *out)
 {
     (void)This;
     if (a || !out) return D3DERR_INVALIDCALL;
-    int n = 0;
-    SDL_DisplayMode **m = SDL_GetFullscreenDisplayModes(SDL_GetPrimaryDisplay(), &n);
-    if (n <= 0) { SDL_free(m); desktop_mode(out); out->Format = f; return i == 0 ? D3D_OK : D3DERR_INVALIDCALL; }
-    if ((int)i >= n) { SDL_free(m); return D3DERR_INVALIDCALL; }
-    /* (smallest first, as Direct3D lists them) */
-    SDL_DisplayMode *d = m[n - 1 - (int)i];
-    out->Width = (UINT)d->w;
-    out->Height = (UINT)d->h;
-    out->RefreshRate = d->refresh_rate > 0 ? (UINT)(d->refresh_rate + 0.5f) : 60;
-    out->Format = f;
-    SDL_free(m);
+    D3DDISPLAYMODE m[256];
+    int n = modes_of(f, m, 256);
+    if ((int)i >= n) return D3DERR_INVALIDCALL;
+    *out = m[i];
     return D3D_OK;
 }
 
@@ -4071,13 +4099,22 @@ static HRESULT d3d9_CheckDeviceType(void *This, UINT a, D3DDEVTYPE t, D3DFORMAT 
     return af == D3DFMT_X8R8G8B8 || af == D3DFMT_R5G6B5 ? D3D_OK : D3DERR_NOTAVAILABLE;
 }
 
-/* as DXVK answers (work/inv/caps_winmax.hex's log): a depth format as a render target no, a colour
-   format as a depth buffer no, else yes when the format is one we have */
+/* as DXVK 3.1.1 answers (d3d9_adapter.cpp CheckDeviceFormat; both renderers' answers compared with
+   ETM_DUMP_CAPS, VULKAN.md 1): D32 and D24X4S4 never (DXVK maps them nowhere: given here, the game took
+   D32 for its depth buffer where DXVK's gave D24X8), a depth format as a plain surface only lockable,
+   a depth format as a render target no, a colour format as a depth buffer no, else yes when the format
+   is one we have */
 static HRESULT d3d9_CheckDeviceFormat(void *This, UINT a, D3DDEVTYPE t, D3DFORMAT af, DWORD usage, D3DRESOURCETYPE rt, D3DFORMAT f)
 {
-    (void)This; (void)t; (void)af; (void)rt;
+    (void)This; (void)t; (void)af;
     if (a) return D3DERR_INVALIDCALL;
+    if (rt == D3DRTYPE_VERTEXBUFFER || rt == D3DRTYPE_INDEXBUFFER) return D3DERR_INVALIDCALL;
+    if (f == D3DFMT_D32 || f == D3DFMT_D24X4S4) return D3DERR_NOTAVAILABLE;
     const Fmt *x = fmt_of(f);
+    if ((usage & D3DUSAGE_DEPTHSTENCIL) && (!x || !x->depth)) return D3DERR_NOTAVAILABLE;
+    if (x && x->depth && rt == D3DRTYPE_SURFACE && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)) &&
+        f != D3DFMT_D16_LOCKABLE && f != D3DFMT_D32F_LOCKABLE)
+        return D3DERR_NOTAVAILABLE;
     if (!x || x->vk == VK_FORMAT_UNDEFINED) return D3DERR_NOTAVAILABLE;
     if ((usage & D3DUSAGE_RENDERTARGET) && (x->depth || x->block > 1)) return D3DERR_NOTAVAILABLE;
     if ((usage & D3DUSAGE_DEPTHSTENCIL) && !x->depth) return D3DERR_NOTAVAILABLE;
@@ -4095,7 +4132,10 @@ static HRESULT d3d9_CheckDeviceMultiSampleType(void *This, UINT a, D3DDEVTYPE t,
     if (n & (n - 1)) return D3DERR_NOTAVAILABLE;
     if (n > 1 && (x->block > 1 || f == (D3DFORMAT)MAKEFOURCC('I', 'N', 'T', 'Z') || f == D3DFMT_D16_LOCKABLE)) return D3DERR_NOTAVAILABLE;
     VkSampleCountFlags av = x->depth ? R.props.limits.framebufferDepthSampleCounts : R.props.limits.framebufferColorSampleCounts;
-    return (av & n) ? D3D_OK : D3DERR_NOTAVAILABLE;
+    if (!(av & n)) return D3DERR_NOTAVAILABLE;
+    /* (DXVK: NONMASKABLE's quality levels are the sample counts there are) */
+    if (q && ms == D3DMULTISAMPLE_NONMASKABLE) *q = 32 - (DWORD)__builtin_clz(av);
+    return D3D_OK;
 }
 
 static HRESULT d3d9_CheckDepthStencilMatch(void *This, UINT a, D3DDEVTYPE t, D3DFORMAT af, D3DFORMAT rf, D3DFORMAT df)
