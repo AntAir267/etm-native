@@ -9,6 +9,8 @@
 # runtime/decomp/: it is saved (work/ab/hash_a.txt with its build id) and reused while the same
 # translation is built; --fresh runs it again.
 # Routes: lobby (default: menus, the cinematic skipped, the jack-in and intro scenes, the lobby fight)
+# over ssh (the T7 worker) a display is needed: the desktop session's, as larush-native's tests do
+export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 set -e
 cd "$(dirname "$0")/.."
 frames=6910 every=10 out=work/ab route=lobby extra=() fresh=0

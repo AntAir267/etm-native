@@ -7,6 +7,8 @@
 # b's clock switches to RATE at frame FROM (default 2300, just into the game proper, which starts at
 # 2283): the route's menu keys are timed for the default test clock.
 #   tests/rate.sh [--rate N] [--from FRAME] [--frames N] [--every N] [--dump TICK] [--out DIR]
+# over ssh (the T7 worker) a display is needed: the desktop session's, as larush-native's tests do
+export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 rate=120 from=2300 frames=6910 every=10 out=work/rate dump=
 while [ $# -gt 0 ]; do
     case "$1" in
