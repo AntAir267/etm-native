@@ -21,7 +21,7 @@ DXVK_INC = -I$(DXVK)/include/dxvk
 # the drawing code's rewrites (runtime/decomp/, DESIGN.md)
 DC_SRC = $(wildcard runtime/decomp/*.c)
 RT_OBJ = $(patsubst runtime/%.c,build/obj/rt_%.o,$(filter runtime/%,$(RT_SRC))) build/obj/rt_d3d9_gen.o \
-         build/obj/rt_shaders_gen.o \
+         build/obj/rt_shaders_gen.o build/obj/rt_spirv_gen.o \
          $(patsubst runtime/decomp/%.c,build/obj/dc_%.o,$(DC_SRC))
 # The code files recomp.py wrote, listed in gen/files.mk once it has run.
 -include gen/files.mk
@@ -66,6 +66,25 @@ gen/shaders_gen.c: FORCE
 build/obj/rt_shaders_gen.o: gen/shaders_gen.c | build/obj
 	$(CC) $(CFLAGS_RT) -c $< -o $@
 FORCE:
+
+# our own Vulkan renderer (option renderer = vulkan; VULKAN.md): the Direct3D objects over Vulkan
+# (runtime/vk_*.c, DXVK's headers for the types); the fixed-function uber-shaders (runtime/shaders/
+# ff.vert, ff.frag) compiled to SPIR-V by glslangValidator as C arrays and validated with spirv-val;
+# the game's programmable shaders compiled by tools/d3d2spv.py (its text shaders, the bytecode it made
+# in earlier runs in SHADER_CAPTURE, data/shaders), run on every make and rewritten only on a change
+GLSLANG ?= glslangValidator
+SPIRV_VAL ?= spirv-val
+SHADER_CAPTURE ?= $(HOME)/.local/share/etm-native/shaders
+build/obj/rt_vk_%.o: runtime/vk_%.c runtime/*.h gen/d3d9_gen.h gen/funcs.h gen/ff_vert.h gen/ff_frag.h | build/obj
+	$(CC) $(CFLAGS_RT) $(DXVK_INC) -Wno-missing-field-initializers -c $< -o $@
+gen/ff_vert.h gen/ff_frag.h: gen/ff_%.h: runtime/shaders/ff.%
+	$(GLSLANG) -V --target-env vulkan1.3 -o gen/ff_$*.spv $<
+	$(SPIRV_VAL) --target-env vulkan1.3 gen/ff_$*.spv
+	$(GLSLANG) -V --target-env vulkan1.3 --vn vk_ff_$* -o $@ $<
+gen/spirv_gen.c: FORCE
+	$(PY) tools/d3d2spv.py table $(GAME) data/shaders $(SHADER_CAPTURE) $@
+build/obj/rt_spirv_gen.o: gen/spirv_gen.c runtime/vk_abi.h | build/obj
+	$(CC) $(CFLAGS_RT) -c $< -o $@
 
 build/etm: $(RT_OBJ) $(GEN_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS)
