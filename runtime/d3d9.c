@@ -340,8 +340,80 @@ static void pp_out(uint32_t g, const D3DPRESENT_PARAMETERS *pp)
 static void *dxvk;
 static void *(*dxvk_create9)(UINT);
 
+void *vk_create9(void);                 /* vk_d3d9.c: our own Vulkan renderer's IDirect3D9 */
+static int vk_renderer;                 /* it is the one running */
+void vk_buf_host(void *buf, void *host);    /* vk_d3d9.c: a buffer's host copy is the program's */
+
+/* ETM_DUMP_CAPS=1 (a measuring aid for our renderer, VULKAN.md): the answers the game asks for at the
+   start (caps, adapter, formats, modes), from whichever renderer runs, in the log; runtime/vk_d3d9.c
+   gives DXVK's */
+static void dump_caps(void *d)
+{
+    D3DCAPS9 caps;
+    D3DADAPTER_IDENTIFIER9 id;
+    char hex[2 * sizeof caps + 1];
+    if (((HRESULT (*)(void *, UINT, D3DDEVTYPE, D3DCAPS9 *))VT(d)[14])(d, 0, D3DDEVTYPE_HAL, &caps) >= 0) {
+        for (size_t i = 0; i < sizeof caps; i++) sprintf(hex + 2 * i, "%02x", ((uint8_t *)&caps)[i]);
+        LOG(LOG_ALWAYS, "caps %zu bytes: %s", sizeof caps, hex);
+    }
+    if (((HRESULT (*)(void *, UINT, DWORD, D3DADAPTER_IDENTIFIER9 *))VT(d)[5])(d, 0, 0, &id) >= 0)
+        LOG(LOG_ALWAYS, "adapter: driver '%s' description '%s' device name '%s' vendor %04x device %04x "
+            "subsys %08x revision %u whql %u version %llx", id.Driver, id.Description, id.DeviceName,
+            (unsigned)id.VendorId, (unsigned)id.DeviceId, (unsigned)id.SubSysId, (unsigned)id.Revision,
+            (unsigned)id.WHQLLevel, (unsigned long long)id.DriverVersion.QuadPart);
+    static const uint32_t fmts[] = {D3DFMT_X8R8G8B8, D3DFMT_A8R8G8B8, D3DFMT_R5G6B5, D3DFMT_D24S8, D3DFMT_D24X8, D3DFMT_D24X4S4,
+                                    D3DFMT_D32, D3DFMT_D16, D3DFMT_DXT1, D3DFMT_DXT5, D3DFMT_A4R4G4B4};
+    for (size_t k = 0; k < sizeof fmts / sizeof *fmts; k++)
+        for (uint32_t usage = 0; usage < 3; usage++)
+            for (uint32_t rt = D3DRTYPE_SURFACE; rt <= D3DRTYPE_TEXTURE; rt += 2) {
+                HRESULT r = ((HRESULT (*)(void *, UINT, D3DDEVTYPE, D3DFORMAT, DWORD, D3DRESOURCETYPE, D3DFORMAT))VT(d)[10])(
+                    d, 0, D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, usage, (D3DRESOURCETYPE)rt, (D3DFORMAT)fmts[k]);
+                LOG(LOG_ALWAYS, "CheckDeviceFormat(X8R8G8B8, usage %u, type %u, %u) -> %08x", usage, rt, fmts[k], (unsigned)r);
+            }
+    static const uint32_t msf[] = {D3DFMT_A8R8G8B8, D3DFMT_X8R8G8B8, D3DFMT_D24S8, D3DFMT_D24X8};
+    for (size_t k = 0; k < sizeof msf / sizeof *msf; k++)
+        for (uint32_t ms = 0; ms <= 16; ms++) {
+            DWORD q = 0;
+            HRESULT r = ((HRESULT (*)(void *, UINT, D3DDEVTYPE, D3DFORMAT, BOOL, D3DMULTISAMPLE_TYPE, DWORD *))VT(d)[11])(
+                d, 0, D3DDEVTYPE_HAL, (D3DFORMAT)msf[k], TRUE, (D3DMULTISAMPLE_TYPE)ms, &q);
+            LOG(LOG_ALWAYS, "CheckDeviceMultiSampleType(%u, windowed, %u) -> %08x quality %u", msf[k], ms, (unsigned)r, (unsigned)q);
+        }
+    LOG(LOG_ALWAYS, "CheckDeviceType(X8R8G8B8, X8R8G8B8, windowed) -> %08x, CheckDepthStencilMatch(D24X8) -> %08x",
+        (unsigned)((HRESULT (*)(void *, UINT, D3DDEVTYPE, D3DFORMAT, D3DFORMAT, BOOL))VT(d)[9])(d, 0, D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, D3DFMT_X8R8G8B8, TRUE),
+        (unsigned)((HRESULT (*)(void *, UINT, D3DDEVTYPE, D3DFORMAT, D3DFORMAT, D3DFORMAT))VT(d)[12])(d, 0, D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, D3DFMT_X8R8G8B8, D3DFMT_D24X8));
+    UINT nm = ((UINT (*)(void *, UINT, D3DFORMAT))VT(d)[6])(d, 0, D3DFMT_X8R8G8B8);
+    for (UINT i = 0; i < nm && i < 64; i++) {
+        D3DDISPLAYMODE m;
+        if (((HRESULT (*)(void *, UINT, D3DFORMAT, UINT, D3DDISPLAYMODE *))VT(d)[7])(d, 0, D3DFMT_X8R8G8B8, i, &m) >= 0)
+            LOG(LOG_ALWAYS, "mode %u of %u: %ux%u %u Hz format %u", i, nm, m.Width, m.Height, m.RefreshRate, m.Format);
+    }
+    D3DDISPLAYMODE dm;
+    if (((HRESULT (*)(void *, UINT, D3DDISPLAYMODE *))VT(d)[8])(d, 0, &dm) >= 0)
+        LOG(LOG_ALWAYS, "adapter display mode: %ux%u %u Hz format %u", dm.Width, dm.Height, dm.RefreshRate, dm.Format);
+}
+
 API(D3D9, Direct3DCreate9, 1)
 {
+    /* option renderer = dxvk (the default: DXVK, until Ant has played ours: DESIGN.md 11) | vulkan (our
+       own, VULKAN.md): the same COM interfaces, so everything below and d3d9_msaa.c call either the
+       same way; ours falls back to DXVK if it cannot start */
+    static int vulkan = -1;
+    if (vulkan < 0)
+        vulkan = !strcasecmp(option_str("renderer", "dxvk"), "vulkan");
+    if (vulkan) {
+        void *d = vk_create9();
+        if (d) {
+            /* (the classes' guest vtables made once, as on DXVK's path: made at every call, the
+               game's second Direct3DCreate9 allocated them again and moved every later object) */
+            if (!vk_renderer) d3d_classes_init();
+            vk_renderer = 1;
+            LOG(LOG_ALWAYS, "Direct3DCreate9(%u) -> %p (our own Vulkan renderer)", ARG(0), d);
+            if (getenv("ETM_DUMP_CAPS")) dump_caps(d);
+            return d3d_wrap_new(DK_IDirect3D9, d);
+        }
+        LOG(LOG_ALWAYS, "renderer = vulkan: our renderer could not start; DXVK instead");
+        vulkan = 0;
+    }
     if (!dxvk) {
         char dir[1024], path[1200];
         ssize_t n = readlink("/proc/self/exe", dir, sizeof dir - 1);
@@ -383,6 +455,7 @@ API(D3D9, Direct3DCreate9, 1)
         LOG(LOG_ALWAYS, "Direct3DCreate9 without a host window (headless run): DXVK cannot present");
     void *d = dxvk_create9(ARG(0));
     LOG(LOG_ALWAYS, "Direct3DCreate9(%u) -> %p", ARG(0), d);
+    if (d && getenv("ETM_DUMP_CAPS")) dump_caps(d);
     return d3d_wrap_new(DK_IDirect3D9, d);
 }
 
@@ -815,6 +888,8 @@ static uint32_t buffer_lock(CPU *c, int desc_index_size)
         memcpy(&e->size, desc + desc_index_size, 4);
         e->shadow = galloc(e->size + 16);
         memset(gptr(e->shadow), 0, e->size);
+        if (vk_renderer)                /* (our renderer's host copy: this one, vk_d3d9.c) */
+            vk_buf_host(self, gptr(e->shadow));
     }
     if (off > e->size) off = e->size;
     if (!len || off + len > e->size) len = e->size - off;
@@ -824,7 +899,7 @@ static uint32_t buffer_lock(CPU *c, int desc_index_size)
         W32(ARG(3), 0);
         return r;
     }
-    if (flags & D3DLOCK_READONLY)
+    if ((flags & D3DLOCK_READONLY) && hp != gptr(e->shadow + off))   /* (our renderer: the same bytes) */
         memcpy(gptr(e->shadow + off), hp, len);
     if (e->nlocks < 4)
         e->locks[e->nlocks] = (typeof(e->locks[0])){off, (flags & D3DLOCK_READONLY) ? 0 : len, hp};
@@ -840,7 +915,8 @@ static uint32_t buffer_unlock(CPU *c)
     if (e && e->nlocks > 0) {
         e->nlocks--;
         if (e->nlocks < 4 && e->locks[e->nlocks].len) {
-            memcpy(e->locks[e->nlocks].hp, gptr(e->shadow + e->locks[e->nlocks].off), e->locks[e->nlocks].len);
+            if (e->locks[e->nlocks].hp != gptr(e->shadow + e->locks[e->nlocks].off))
+                memcpy(e->locks[e->nlocks].hp, gptr(e->shadow + e->locks[e->nlocks].off), e->locks[e->nlocks].len);
             if (draw_hashing)
                 draw_hash_bytes(gptr(e->shadow + e->locks[e->nlocks].off), e->locks[e->nlocks].len);
             if (dev_recording)

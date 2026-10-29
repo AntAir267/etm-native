@@ -209,7 +209,9 @@ static void run_thunk(CPU *c, uint32_t t)
         return;
     }
     if (dev_recording) devrec_call_begin(c, t);
+    if (__builtin_expect(d3dinv_on, 0) && n) d3dinv_call(c, n);
     thunk_fns[(t - THUNK_BASE) >> 4](c);
+    if (__builtin_expect(d3dinv_on, 0)) d3dinv_after(c);
     if (dev_recording) devrec_call_end(c, t, n);
 }
 

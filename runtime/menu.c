@@ -3,7 +3,8 @@
    the front end's own Options pages, built, drawn and navigated by the game's menu code:
 
    - Video (title menu > Options > Video): Subtitles, then Display, Resolution, V-Sync, Frame Rate,
-     Frame Limit, Anti-Aliasing, Anisotropic Filtering, HUD, Movies, Cut Scenes, Menus.
+     Frame Limit, Anti-Aliasing, Anisotropic Filtering, HUD, Movies, Cut Scenes, Menus, Renderer
+     (DXVK / our own Vulkan renderer: VULKAN.md; on restart).
    - Controls: Vibration after Fighting, Driving, Hovercraft, Mouse.
 
    THE GAME'S MENUS [verified: disassembly of the functions named, frames of the pages]. The Options
@@ -157,6 +158,7 @@ static const Setting video_rows[] = {
     {"Movies", "movies", {"fill", "fit"}, {"Fill", "Fit"}, 0, apply_layout},
     {"Cut Scenes", "cutscenes", {"fill", "bars"}, {"Fill", "Bars"}, 0, apply_layout},
     {"Menus", "ui", {"center", "stretch"}, {"Center", "Stretch"}, 0, apply_layout},
+    {"Renderer", "renderer", {"dxvk", "vulkan"}, {"DXVK", "Vulkan"}, 1, NULL},
 };
 #define NVIDEO ((int)(sizeof video_rows / sizeof video_rows[0]))
 
@@ -216,6 +218,8 @@ static void canonical(const Setting *s, const char *v, char *out, size_t n)
         snprintf(out, n, "%s", v && !strcasecmp(v, "bars") ? "bars" : "fill");
     else if (!strcmp(k, "ui"))                  /* stretch, else center */
         snprintf(out, n, "%s", v && !strcasecmp(v, "stretch") ? "stretch" : "center");
+    else if (!strcmp(k, "renderer"))            /* d3d9.c Direct3DCreate9: vulkan, else DXVK */
+        snprintf(out, n, "%s", v && !strcasecmp(v, "vulkan") ? "vulkan" : "dxvk");
     else
         snprintf(out, n, "%s", v ? v : "");
 }
@@ -303,11 +307,11 @@ static void sound(CPU *c, uint32_t id)
 }
 
 /* ------------------------------------------------------------------ the Video page */
-/* layout: twelve rows from y 64, 27 apart (the game's own rows are 70 apart for four; its key
+/* layout: thirteen rows from y 64, 25 apart (27 for the twelve before Renderer; the game's own rows are 70 apart for four; its key
    binding pages set nineteen 17 apart), labels at x 70, values at x 330; a text wider than its
    list's width (+0x5c, 180 on the game's page) wraps onto a second line, so the widths are wider */
 #define V_Y0        64
-#define V_SPACING   27
+#define V_SPACING   25
 #define V_LABEL_X   70
 #define V_LABEL_W   256
 #define V_VALUE_X   330
@@ -336,7 +340,7 @@ static int hook_video_setup_fn(CPU *c)
     uint32_t ret = c->ret, eax = c->eax;
     uint32_t lb = SCR_LABELS(scr), vl = SCR_VALUES(scr);
     sub_on = R8(SUBTITLES) != 0;
-    /* the labels: a column (the setup's look, laid out for twelve rows) */
+    /* the labels: a column (the setup's look, laid out for thirteen rows) */
     W32(L_LOOK(lb, 0x30), V_LABEL_X);
     W32(L_LOOK(lb, 0x34), V_Y0);
     W32(L_LOOK(lb, 0x5c), V_LABEL_W);
