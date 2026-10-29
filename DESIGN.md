@@ -425,3 +425,8 @@ Round 1 (2026-10-29; VULKAN.md is the renderer's own handoff): done as planned, 
 - 2026-10-27: the port's settings in the game's own Options > Video and Controls pages (decision 10,
   runtime/menu.c, five hooks); tests/ab.sh same.
 
+- 2026-10-29: our own Vulkan renderer, round 1 (decision 11, VULKAN.md): larush-native's renderer with
+  Direct3D's fixed function as two specialized uber-shaders; option renderer = dxvk (default) | vulkan,
+  Video page row Renderer. The test route draws only fixed function (no shaders); every image-check frame
+  identical to DXVK's on the Win Max at 640x480 and 1280x720, within the limits on the T7; validation
+  silent; tests/ab.sh same under both renderers, their hash files identical to each other.

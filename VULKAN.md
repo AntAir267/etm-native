@@ -8,9 +8,11 @@ background), brought over with the fixed-function pipeline Enter the Matrix need
 did.
 
 **Status (round 1, 2026-10-29):** `renderer = vulkan` draws the whole test route (front end, film,
-in-engine scenes, the lobby fight) through our renderer; every picture of the image check is
-identical to DXVK's on the Win Max (640x480) [results: 3]; the Khronos validation layer is silent on
-the route; tests/ab.sh says "same" under both renderers [3]. DXVK stays the default.
+in-engine scenes, the lobby fight) through our renderer, all of it Direct3D's fixed function; every
+picture of the image check is identical to DXVK's on the Win Max at 640x480 and 1280x720, and within
+the limits on the T7's RTX 4070 (single edge pixels); the Khronos validation layer is silent on both;
+tests/ab.sh says "same" under both renderers and the two renderers' hash files are identical [3].
+DXVK stays the default; speed is not measured yet (round 2).
 
 How to run and look:
 - `--option renderer=vulkan` (or `renderer = vulkan` in options.txt, or Options > Video > Renderer:
@@ -88,7 +90,7 @@ intro, the save prompt), lobby (4700-6910: the Post Office lobby, the HUD, a gua
 - Buffers: 3,690 MANAGED vertex buffers (stride 32 + a stride-4 colour stream), 969 MANAGED index
   buffers (INDEX16), one DYNAMIC | WRITEONLY vertex buffer locked with DISCARD 15 a frame.
 - Clears: target + depth, target only (the 256x256 targets), depth only.
-- One BeginStateBlock / EndStateBlock at the start, never applied; SetGammaRamp once (2.7).
+- One BeginStateBlock / EndStateBlock at the start, never applied; SetGammaRamp once (a near-identity ramp: 4).
 
 ### 1.4 What our own runtime adds (from the code)
 - d3d9_msaa.c (antialiasing twins, 4x by default): **never active on the route** [verified: no
@@ -101,15 +103,31 @@ intro, the save prompt), lobby (4700-6910: the Post Office lobby, the HUD, a gua
   shots (GetBackBuffer, CreateOffscreenPlainSurface SYSTEMMEM, GetRenderTargetData, LockRect), buffer
   and texture locks through the program's copies.
 
-### 1.5 The device's answers (ETM_DUMP_CAPS)
-Both renderers' answers diffed [verified: work/vk/capd.txt, capv.txt, 2026-10-29]: caps (larush-
-native's dump of DXVK 3.1.1 on this machine) and the adapter identity were the same from the start;
-three differences were found and fixed: (1) CheckDeviceFormat said yes to D32 and D24X4S4, which DXVK
-maps nowhere, and to depth formats as plain surfaces: the game then took D32 for its depth buffer
-(DXVK's run: D24X8), so its memory differed; (2) NONMASKABLE multisampling's quality levels (DXVK:
-the sample counts there are, 4); (3) the mode list: SDL lists 2560x1440 twice on this machine and DXVK
-drops exact duplicates (27 modes, ours 28). Now identical, and the game calls Direct3DCreate9 twice
-under both, as before.
+### 1.5 The device's answers: the game's memory the same under both renderers
+The memory and draw-stream hashes must not depend on the renderer (2.5), so every answer the game
+gets must be DXVK's. Found by diffing both renderers' answers (ETM_DUMP_CAPS) and then the first
+frames' memory and calls (`--hash --hash-every 1`, `--hash-calls`, memdiff.py, the inventory's
+check lines with their answers) [verified: work/vk/capd.txt / capv.txt, hc_*, cl_*; 2026-10-29]:
+1. CheckDeviceFormat said yes to D32 and D24X4S4 (DXVK maps them nowhere) and to depth formats as plain
+   surfaces: the game took D32 for its depth buffer where DXVK's gave D24X8.
+2. NONMASKABLE multisampling's quality levels: DXVK gives the sample counts there are (4).
+3. The mode list: SDL lists 2560x1440 twice on this machine; DXVK drops exact duplicates, lists the
+   first display SDL gives, truncates the refresh rate and sorts by width, height, refresh down.
+4. CheckDeviceType: DXVK's adapter / back buffer pairs (full screen: X8R8G8B8 with X8R8G8B8 or
+   A8R8G8B8, R5G6B5 with R5G6B5...); CheckDeviceFormat and CheckDepthStencilMatch its adapter format
+   and format rules.
+5. GetDeviceCaps of a software device (D3DDEVTYPE_SW): DXVK has none. Given caps, the game walked its
+   formats a third time (70 more calls before the first frame).
+6. The device's own caps: DXVK's device sets MaxVertexBlendMatrixIndex to 8 (255 with software vertex
+   processing) where the adapter's say 0; the game keeps them. GetCreationParameters gives the
+   creation flags.
+7. Our side, not an answer: larush-native's path called d3d_classes_init at every Direct3DCreate9 (the
+   game makes two), allocating the classes' guest vtables twice and moving every later program
+   object; and it handed out one IDirect3D9 object, so the second Direct3DCreate9 had d3d9.c drop the
+   first's program object as stale. Now the classes are made once and each call gets a new object
+   (the device holding a reference to its parent, as DXVK's).
+Caps (larush-native's dump of DXVK 3.1.1's) and the adapter identity were the same from the start.
+Now the first frames' memory and draw hashes are identical, and over the whole route too (3).
 
 ## 2. Design
 
@@ -212,14 +230,45 @@ pitch aligned to 4 as DXVK's (the program allocates its copies by the pitch: sam
   tests/vk_shots.sh + tests/vk_compare.sh (the image check). d3d9.c: the renderer switch, ETM_DUMP_CAPS,
   vk_buf_host; menu.c: the Video page's Renderer row (thirteen rows now 25 apart); options.c: the
   option's help line; ab.sh / rate.sh: --renderer, --serial.
-- Validation layer (ETM_VK_VALIDATE=1, RADV on the Win Max): silent over the whole route at 640x480
-  once a depth-only format in AMD's D32_SFLOAT_S8_UINT got both aspects in its layout transition
-  (D24X8, the game's depth buffer after the format answers were fixed) [verified: logs].
-- Pictures (Win Max, Radeon 890M, RADV / Mesa 26.0.8, hidden --test runs):
-  - 640x480, the whole route every 100 frames from 1000 (60 frames: menus, film, scenes, lobby):
-    **all identical** to DXVK's (0 pixels differ) [verified: work/vk/full_cmp.txt].
-  - tests/vk_shots.sh at 640x480: see the table below (filled when the runs were done).
-- tests/ab.sh: see below.
+- Validation layer (ETM_VK_VALIDATE=1): **silent** on both routes at 640x480 and 1280x720, on the Win
+  Max (RADV) and the T7 (NVIDIA 595, RTX 4070) [verified: tests/vk_shots.sh's counts, work/shots/
+  winmax.txt, T7 job 20261029-110545]. One error was met and fixed on the way: a depth-only format in
+  AMD's D32_SFLOAT_S8_UINT (D24X8, the game's depth buffer) needs both aspects in its layout transition.
+- **Pictures**, tests/vk_shots.sh (hidden --test runs, DXVK and ours on the same machine, final code
+  3f94a25 + the menu/docs):
+
+  | frame | what | Win Max 640x480 | Win Max 1280x720 | T7 640x480 | T7 1280x720 |
+  |---|---|---|---|---|---|
+  | 1100 | language menu (2D) | identical | identical | identical | identical |
+  | 1380 | title menu (2D) | identical | identical | identical | identical |
+  | 1790 | Options > Video (2D) | identical* | identical* | identical* | identical* |
+  | 1850 | Video page, Renderer row (2D) | identical* | identical* | identical* | identical* |
+  | 1900 | the opening film (2D) | identical | identical | identical | identical |
+  | 2700 | jack-in construct (3D) | identical | identical | 0.017 % >2 %, 56.8 dB, block 0.6 | 0.031 %, 54.8 dB, block 1.6 |
+  | 3500 | in-engine street (3D) | identical | identical | 0.003 %, 67.8 dB, 0.2 | 0.003 %, 67.1 dB, 0.3 |
+  | 4700 | lobby, HUD + message (3D) | identical | identical | 0.008 %, 67.2 dB, 0.3 | 0.008 %, 62.6 dB, 2.0 |
+  | 5600 | lobby (3D) | identical | identical | 0.008 %, 66.2 dB, 0.5 | 0.028 %, 61.8 dB, 1.1 |
+  | 6500 | lobby fight (3D) | identical | identical | 0.012 %, 61.5 dB, 1.2 | 0.028 %, 60.1 dB, 1.8 |
+  | 6900 | lobby fight (3D) | identical | identical | 0.002 %, 72.9 dB, 0.2 | 0.002 %, 64.9 dB, 1.5 |
+
+  (* the Renderer value's box painted out in both: it shows each run's own renderer.) Every frame
+  passes; on the Win Max every frame is identical to DXVK's, 2D and 3D. On NVIDIA the 3D frames differ
+  in single pixels along triangle edges (the construct's hair and collar outlines: work/vk/
+  t7d2700_over.png) [guess: the last bits of vertex positions, NVIDIA's compiler treating the
+  specialized shader's precise dot products otherwise than DXVK's shader with run-time values; not
+  chased in round 1]. Also on the Win Max: the whole route every 100 frames from 1000 (60 frames),
+  640x480: all identical [verified: work/vk/full_cmp.txt, before the device-answer fixes].
+- **Logic checks** (Win Max): tests/ab.sh --serial "same (691 hashes to frame 6910)" with renderer =
+  dxvk and with renderer = vulkan; and the two renderers' runs' hash files (memory and draw stream,
+  691 checkpoints each, the translation's and the rewrites') **identical to each other** once the
+  answers of 1.5 were fixed [verified: work/vk/checks.txt].
+- Pipelines: 35 over the route on a cold start (each 10-160 ms with the validation layer, on the game
+  thread; the list on disk has the next run's workers make them at the start).
+- How the T7 ran this branch: the worktree's own folder (the repository's .claude/worktrees/
+  agent-a690bbad773124c5b, inside the projects folder, so `t7 sync` / `t7 run` take it as the project path and
+  copy only its git files; the main checkout's sync skips .claude/), with third_party/dxvk-native and
+  sdl3 copied from this machine's and gen/ copied and dated after the sources (no translation and no
+  venv needed there); `t7 run <that path> --wait -- make JOBS=16 && tests/vk_shots.sh`.
 
 ## 4. Round 2 (proposed) and what is not done
 - Speed: frame times, game-thread CPU and GPU time against DXVK on the Win Max (quiet), then
@@ -228,7 +277,13 @@ pitch aligned to 4 as DXVK's (the program allocates its copies by the pitch: sam
 - The rest of the game: driving and hovercraft levels, other beats (need saves); shaders any of them
   make (SH_BackgroundShadow: check d3dasm's bytes against D3DX's, ETM_D3D_INV captures them).
 - Fixed-function features not met yet (2.3's list): vertex blending, clip planes, flat shading.
-- Gamma: SetGammaRamp is kept, not applied (DXVK applies a non-identity ramp when presenting; shots
-  read the back buffer and never show it either way).
+- Gamma: SetGammaRamp is kept and given back, not applied. The game sets one at the start that is the
+  identity but for rounding (entry 64 is 16447, the identity's 16448; 128: 32895 for 32896; 255:
+  65535) [verified: the log line of our SetGammaRamp]; DXVK applies any ramp that is not exactly the
+  identity in its present blit, through a lookup texture, which at most moves a value by 1/65535
+  before the 8-bit swapchain rounds it [guess: so the screen is the same; not measured: shots read the
+  back buffer, before either's present, so they cannot show it]. The Video page has no gamma rows
+  on the PC (decision 10). If a ramp that matters turns up, apply it in Present (a pass where the
+  back buffer's passes now draw straight into the swapchain image).
 - Antialiasing: d3d9_msaa.c never engages in this game (1.4); a fix belongs to the drawing side (the
   scene drawn into a multisampled back buffer, or the twin idea applied to the back buffer).

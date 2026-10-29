@@ -6,6 +6,8 @@
 # made (work/inv/shaders/<hash>.vsh.bin / .psh.bin). tools/d3dinv_report.py sums them up.
 #   tests/d3d_inventory.sh [-- extra etm arguments]      (e.g. -- --option renderer=vulkan)
 cd "$(dirname "$0")/.."
+# (over ssh, the T7: the desktop session's display)
+export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 extra=()
 [ "$1" = -- ] && { shift; extra=("$@"); }
 out=work/inv
@@ -15,6 +17,7 @@ rm -rf "$u"; mkdir -p "$u"
 keys="1200:RETURN,1400:DOWN,1430:RETURN,1700:RETURN,2000:ESCAPE,2200:RETURN,2700:RETURN,3200:RETURN,4000:RETURN,4300:RETURN,4600:RETURN"
 # one game run at a time on the machine, across worktrees (tests/ab.sh's lock)
 main=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
+main=${main:-$PWD}
 mkdir -p "$main/work"
 exec 9> "$main/work/ab.lock"
 flock 9
