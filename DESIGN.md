@@ -328,6 +328,44 @@ highlighted and moved through by the game's own list code [verified: frames at 6
   Anisotropic Filtering (read when the device is created); their value reads "(on restart)"
   while it differs from the one in force. Every change is option_set + options_save at once.
 
+### 11. Our own Vulkan renderer (Ant, 2026-10-29, relayed by Recomp Advisor; GAME-GOALS exception)
+Replace DXVK as the way the game draws, without waiting for a full playthrough. Rules: a Video
+page row (Renderer: DXVK / Vulkan), DXVK the default until Ant has played ours; verified without
+him (same scenes through both, frame-by-frame image comparisons, the usual checks), on the T7.
+Base: larush-native's renderer (VULKAN.md there: host COM objects with Direct3D 9's vtables in
+runtime/vk_d3d9.c over vk_core.c; tools/d3d2spv.py compiling shader bytecode to SPIR-V at build
+time; bindless textures, constants in a per-frame ring, pipelines by content key and cached on
+disk, dynamic rendering). This runtime came from the same lineage (d3d9gen.py wrappers, d3d9.c
+specials), so Direct3DCreate9 hands out ours when renderer = vulkan and nothing above changes.
+What differs from LA Rush:
+- Fixed function: one lobby frame has 1,452 SetTransform, 8,502 SetTextureStageState, 378
+  SetMaterial, 45 SetLight / 69 LightEnable, SetFVF draws (DESIGN 9b's frame log): most of the
+  world and objects go through Direct3D's fixed-function pipeline, which LA Rush never used.
+  Plan: one vertex and one fragment uber-shader written in GLSL, compiled to SPIR-V at build time,
+  their paths chosen by specialization constants from a state key (vertex: transform, normals,
+  up to 8 lights by type, material sources, texture coordinate generation and texture
+  transforms, fog, point size; fragment: up to 8 texture stages' colour/alpha ops and arguments,
+  texture factor, alpha test, fog, specular add), the driver dropping the unused paths at pipeline
+  creation; the meaning follows DXVK 3.1.1's d3d9_fixed_function.cpp (the reference for parity).
+- Shaders: vs/ps 1.x-2.0 (the shadow receivers' and the actors' passes) through d3d2spv.py.
+- The movies (DivX frames uploaded to textures), the 2D layout (d3d9.c ui2d, SetViewport special),
+  the projection hook and MSAA (d3d9_msaa.c) keep working under both.
+Steps:
+1. Inventory (port LA Rush's d3d9_inv.c and report): every method, state, format and FVF the
+   test routes use (front end, films, lobby, cut scenes; driving and hovercraft need saves: [later]).
+2. Round 1: LA Rush's renderer brought over and adapted, plus the fixed-function shaders;
+   the Renderer row; draws everything the inventory lists; validation layer silent.
+3. Pictures: the same deterministic --test frames through both (menus, a film, a cut scene, the
+   lobby fight; 640x480 and 2560x1440), compared per frame as LA Rush does (2D identical; 3D at most
+   0.5 % of pixels over 5 levels, PSNR >= 45 dB, no 16x16 block mean over 4 levels off); the memory
+   and draw-stream hashes are renderer-independent, so tests/ab.sh and tests/rate.sh must still say
+   "same" with renderer = vulkan.
+4. Speed: frame times, game-thread and GPU time against DXVK, on the T7 and finally the Win Max
+   (quiet); then the cuts LA Rush made (direct device calls from runtime/decomp, buffers copied
+   once, pipelines made at load).
+Where: the T7 for builds, image runs and comparisons (game files copied there once, with Ant's OK);
+final speed and look on the Win Max.
+
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/etm12.py; first translator run; Miles
   stand-in, ReadFileEx; first runs: the intro movies (Atari, Warner Bros., Shiny) play through
