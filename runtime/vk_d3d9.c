@@ -161,7 +161,11 @@ typedef struct { VkObj o; D3DQUERYTYPE type; int slot; int issued; } VkQuery;   
 static int qslots_used;
 static int qfree[4096], nqfree;
 
-static VkObj d3d9_obj, dev_obj;          /* (one of each) */
+static VkObj dev_obj;                    /* (one device) */
+/* IDirect3D9: a new object at every Direct3DCreate9, as DXVK's (the game makes two: one object reused
+   had d3d9.c drop the first's program object as stale, VULKAN.md 1.5); the device keeps a reference to
+   the one that made it, as DXVK's (its m_parent) */
+static VkObj *d3d9_parent;
 static void destroy(VkObj *o);
 
 __attribute__((noinline)) static VkObj *owner(VkObj *o)
@@ -208,7 +212,7 @@ static ULONG com_Release(void *This)
 {
     VkObj *o = owner(This);
     long r = __atomic_sub_fetch(&o->refs, 1, __ATOMIC_ACQ_REL);
-    if (r == 0 && o->irefs == 0 && o != &d3d9_obj && o != &dev_obj) release_last(o);
+    if (r == 0 && o->irefs == 0 && o != &dev_obj) release_last(o);
     if (r < 0) o->refs = 0;
     return (ULONG)(r < 0 ? 0 : r);
 }
@@ -3813,12 +3817,23 @@ static HRESULT dev_GetDirect3D(void *This, IDirect3D9 **out)
 {
     (void)This;
     if (!out) return D3DERR_INVALIDCALL;
-    com_AddRef(&d3d9_obj);
-    *out = (IDirect3D9 *)&d3d9_obj;
+    if (!d3d9_parent) return D3DERR_INVALIDCALL;
+    com_AddRef(d3d9_parent);
+    *out = (IDirect3D9 *)d3d9_parent;
     return D3D_OK;
 }
 static HRESULT d3d9_GetDeviceCaps(void *This, UINT a, D3DDEVTYPE t, D3DCAPS9 *caps);
-static HRESULT dev_GetDeviceCaps(void *This, D3DCAPS9 *caps) { (void)This; return d3d9_GetDeviceCaps(&d3d9_obj, 0, D3DDEVTYPE_HAL, caps); }
+/* the device's caps as DXVK's device gives them (d3d9_device.cpp GetDeviceCaps): the adapter's for its type,
+   with MaxVertexBlendMatrixIndex 8 (255 with software vertex processing); the game keeps them */
+static DWORD dev_flags;
+static D3DDEVTYPE dev_type = D3DDEVTYPE_HAL;
+static HRESULT dev_GetDeviceCaps(void *This, D3DCAPS9 *caps)
+{
+    (void)This;
+    HRESULT r = d3d9_GetDeviceCaps(d3d9_parent, 0, dev_type, caps);
+    if (r == D3D_OK) caps->MaxVertexBlendMatrixIndex = (dev_flags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? 255 : 8;
+    return r;
+}
 static HRESULT dev_GetDisplayMode(void *This, UINT sc, D3DDISPLAYMODE *m)
 {
     (void)This; (void)sc;
@@ -3836,7 +3851,7 @@ static HRESULT dev_GetCreationParameters(void *This, D3DDEVICE_CREATION_PARAMETE
     p->AdapterOrdinal = 0;
     p->DeviceType = D3DDEVTYPE_HAL;
     p->hFocusWindow = NULL;
-    p->BehaviorFlags = D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE;
+    p->BehaviorFlags = dev_flags;
     return D3D_OK;
 }
 static HRESULT dev_SetCursorProperties(void *This, UINT x, UINT y, IDirect3DSurface9 *s) { (void)This; (void)x; (void)y; (void)s; return D3D_OK; }
@@ -3866,11 +3881,28 @@ static HRESULT dev_GetRasterStatus(void *This, UINT sc, D3DRASTER_STATUS *rs)
     return D3D_OK;
 }
 static HRESULT dev_SetDialogBoxMode(void *This, WINBOOL b) { (void)This; (void)b; return D3D_OK; }
-static void dev_SetGammaRamp(void *This, UINT sc, DWORD f, const D3DGAMMARAMP *r) { (void)This; (void)sc; (void)f; (void)r; }
+/* gamma ramps are kept and given back, not applied [DXVK applies one at present when it is not the
+   identity: whether the game sets such a ramp is logged; VULKAN.md 4] */
+static D3DGAMMARAMP gamma_ramp;
+static int gamma_set;
+static void dev_SetGammaRamp(void *This, UINT sc, DWORD f, const D3DGAMMARAMP *r)
+{
+    (void)This; (void)sc; (void)f;
+    if (!r) return;
+    gamma_ramp = *r;
+    gamma_set = 1;
+    int ident = 1;
+    for (int i = 0; i < 256; i++)
+        ident &= r->red[i] == (WORD)(i * 257) && r->green[i] == (WORD)(i * 257) && r->blue[i] == (WORD)(i * 257);
+    LOG(ident ? LOG_D3D : LOG_ALWAYS, "vulkan renderer: gamma ramp set (%s: red %u %u %u ... %u)", ident ? "the identity" :
+        "not the identity, not applied", r->red[0], r->red[64], r->red[128], r->red[255]);
+}
 static void dev_GetGammaRamp(void *This, UINT sc, D3DGAMMARAMP *r)
 {
     (void)This; (void)sc;
-    if (r) for (int i = 0; i < 256; i++) r->red[i] = r->green[i] = r->blue[i] = (WORD)(i * 257);
+    if (!r) return;
+    if (gamma_set) { *r = gamma_ramp; return; }
+    for (int i = 0; i < 256; i++) r->red[i] = r->green[i] = r->blue[i] = (WORD)(i * 257);
 }
 static HRESULT dev_UpdateSurface(void *This, IDirect3DSurface9 *s, const RECT *sr, IDirect3DSurface9 *d, const POINT *dp)
 {
@@ -4100,11 +4132,24 @@ static HRESULT d3d9_GetAdapterDisplayMode(void *This, UINT a, D3DDISPLAYMODE *m)
     return D3D_OK;
 }
 
+/* DXVK 3.1.1's adapter and back buffer format rules (d3d9_monitor.cpp): the game walks adapter / back
+   buffer pairs, full screen and windowed, and lists the depth formats of each one accepted, so a pair
+   DXVK refuses and ours accepted gave it a longer list (more calls, other memory: VULKAN.md 1.5) */
+static int adapter_fmt_ok(D3DFORMAT f)
+{
+    return f == D3DFMT_A2R10G10B10 || f == D3DFMT_X8R8G8B8 || f == D3DFMT_X1R5G5B5 || f == D3DFMT_R5G6B5;
+}
+
 static HRESULT d3d9_CheckDeviceType(void *This, UINT a, D3DDEVTYPE t, D3DFORMAT af, D3DFORMAT bf, WINBOOL w)
 {
-    (void)This; (void)t; (void)bf; (void)w;
+    (void)This; (void)t;
     if (a) return D3DERR_INVALIDCALL;
-    return af == D3DFMT_X8R8G8B8 || af == D3DFMT_R5G6B5 ? D3D_OK : D3DERR_NOTAVAILABLE;
+    if (!adapter_fmt_ok(af)) return D3DERR_NOTAVAILABLE;
+    int ok = w ? bf == D3DFMT_A8R8G8B8 || bf == D3DFMT_X8R8G8B8 || bf == D3DFMT_A1R5G5B5 || bf == D3DFMT_X1R5G5B5 ||
+                 bf == D3DFMT_R5G6B5 || bf == D3DFMT_UNKNOWN
+               : (af == D3DFMT_A2R10G10B10 && bf == D3DFMT_A2R10G10B10) || (af == D3DFMT_X8R8G8B8 && bf == D3DFMT_X8R8G8B8) ||
+                 (af == D3DFMT_X8R8G8B8 && bf == D3DFMT_A8R8G8B8) || (af == D3DFMT_R5G6B5 && bf == D3DFMT_R5G6B5);
+    return ok ? D3D_OK : D3DERR_NOTAVAILABLE;
 }
 
 /* as DXVK 3.1.1 answers (d3d9_adapter.cpp CheckDeviceFormat; both renderers' answers compared with
@@ -4115,8 +4160,9 @@ static HRESULT d3d9_CheckDeviceType(void *This, UINT a, D3DDEVTYPE t, D3DFORMAT 
 static HRESULT d3d9_CheckDeviceFormat(void *This, UINT a, D3DDEVTYPE t, D3DFORMAT af, DWORD usage, D3DRESOURCETYPE rt, D3DFORMAT f)
 {
     (void)This; (void)t; (void)af;
-    if (a) return D3DERR_INVALIDCALL;
+    if (a || af == D3DFMT_UNKNOWN) return D3DERR_INVALIDCALL;
     if (rt == D3DRTYPE_VERTEXBUFFER || rt == D3DRTYPE_INDEXBUFFER) return D3DERR_INVALIDCALL;
+    if (!adapter_fmt_ok(af)) return D3DERR_NOTAVAILABLE;
     if (f == D3DFMT_D32 || f == D3DFMT_D24X4S4) return D3DERR_NOTAVAILABLE;
     const Fmt *x = fmt_of(f);
     if ((usage & D3DUSAGE_DEPTHSTENCIL) && (!x || !x->depth)) return D3DERR_NOTAVAILABLE;
@@ -4148,8 +4194,12 @@ static HRESULT d3d9_CheckDeviceMultiSampleType(void *This, UINT a, D3DDEVTYPE t,
 
 static HRESULT d3d9_CheckDepthStencilMatch(void *This, UINT a, D3DDEVTYPE t, D3DFORMAT af, D3DFORMAT rf, D3DFORMAT df)
 {
-    (void)This; (void)t; (void)af; (void)rf; (void)df;
-    return a ? D3DERR_INVALIDCALL : D3D_OK;
+    (void)This; (void)t; (void)af;
+    if (a) return D3DERR_INVALIDCALL;
+    const Fmt *d = fmt_of(df), *r = fmt_of(rf);         /* (DXVK: a depth format it has, a target format it has) */
+    if (!d || !d->depth || df == D3DFMT_D32 || df == D3DFMT_D24X4S4) return D3DERR_NOTAVAILABLE;
+    if (rf == (D3DFORMAT)MAKEFOURCC('N', 'U', 'L', 'L')) return D3D_OK;
+    return r && r->vk != VK_FORMAT_UNDEFINED ? D3D_OK : D3DERR_NOTAVAILABLE;
 }
 
 static HRESULT d3d9_CheckDeviceFormatConversion(void *This, UINT a, D3DDEVTYPE t, D3DFORMAT s, D3DFORMAT d)
@@ -4162,6 +4212,9 @@ static HRESULT d3d9_GetDeviceCaps(void *This, UINT a, D3DDEVTYPE t, D3DCAPS9 *ca
 {
     (void)This;
     if (a || !caps) return D3DERR_INVALIDCALL;
+    /* (DXVK: no software device. The game asks for its caps at the start and, given them, walked its
+       formats a third time: VULKAN.md 1.5) */
+    if (t == D3DDEVTYPE_SW) return D3DERR_NOTAVAILABLE;
     caps_load();
     *caps = caps_dxvk;
     caps->DeviceType = t;
@@ -4173,10 +4226,12 @@ static HMONITOR d3d9_GetAdapterMonitor(void *This, UINT a) { (void)This; (void)a
 static HRESULT d3d9_CreateDevice(void *This, UINT a, D3DDEVTYPE t, HWND focus, DWORD flags, D3DPRESENT_PARAMETERS *pp,
                                  IDirect3DDevice9 **out)
 {
-    (void)This; (void)t; (void)focus; (void)flags;
+    (void)focus;
     if (a || !pp || !out) return D3DERR_INVALIDCALL;
     *out = NULL;
     creator_thread = (unsigned long)pthread_self();
+    dev_flags = flags;
+    dev_type = t;
     fmts_init();
     options_read();
     dummies_init();
@@ -4186,6 +4241,10 @@ static HRESULT d3d9_CreateDevice(void *This, UINT a, D3DDEVTYPE t, HWND focus, D
     if (!preloaded++) pipes_preload();
     obj_init(&dev_obj, &vt_dev, DK_IDirect3DDevice9);
     device_live = 1;
+    if (d3d9_parent != This) {
+        com_AddRef(This);
+        d3d9_parent = This;
+    }
     *out = (IDirect3DDevice9 *)&dev_obj;
     LOG(LOG_ALWAYS, "vulkan renderer: device %ux%u, %d shaders in the table", cur_pp.BackBufferWidth, cur_pp.BackBufferHeight,
         vk_shader_count);
@@ -4279,6 +4338,7 @@ void *vk_create9(void)
 {
     if (!vk_init()) return NULL;
     vtables_init();
-    obj_init(&d3d9_obj, &vt_d3d9, DK_IDirect3D9);
-    return &d3d9_obj;
+    VkObj *o = calloc(1, sizeof *o);
+    obj_init(o, &vt_d3d9, DK_IDirect3D9);
+    return o;
 }

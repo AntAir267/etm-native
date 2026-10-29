@@ -403,8 +403,10 @@ API(D3D9, Direct3DCreate9, 1)
     if (vulkan) {
         void *d = vk_create9();
         if (d) {
+            /* (the classes' guest vtables made once, as on DXVK's path: made at every call, the
+               game's second Direct3DCreate9 allocated them again and moved every later object) */
+            if (!vk_renderer) d3d_classes_init();
             vk_renderer = 1;
-            d3d_classes_init();
             LOG(LOG_ALWAYS, "Direct3DCreate9(%u) -> %p (our own Vulkan renderer)", ARG(0), d);
             if (getenv("ETM_DUMP_CAPS")) dump_caps(d);
             return d3d_wrap_new(DK_IDirect3D9, d);

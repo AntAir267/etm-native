@@ -289,7 +289,8 @@ anything drawn from rewritten buffers at 60).
 ### 10. The port's settings in the game's own Options pages (runtime/menu.c, 2026-10-27)
 Ant: "There are no settings in the settings menus." (GAME-GOALS.md: every setting in the game's
 own menu.) Title menu > Options > Video now has, under Subtitles: Display, Resolution, V-Sync,
-Frame Rate, Frame Limit, Anti-Aliasing, Anisotropic Filtering, HUD, Movies, Cut Scenes, Menus;
+Frame Rate, Frame Limit, Anti-Aliasing, Anisotropic Filtering, HUD, Movies, Cut Scenes, Menus (and
+Renderer since 2026-10-29: decision 11);
 Options > Controls has Vibration under Fighting / Driving / Hovercraft / Mouse. All drawn,
 highlighted and moved through by the game's own list code [verified: frames at 640x480 and
 1280x720, options.txt rewritten by each change].
@@ -307,7 +308,7 @@ highlighted and moved through by the game's own list code [verified: frames at 6
 - The PC's Video page (0x660a16 build, 0x6617a7 run, 0x661b8a draw): one label (the Xbox's Gamma,
   Contrast, Brightness are looped over and not added) and On / Off across at x 300, the choice
   going to [0x97f810] when the page is left with back. Hooks: video_setup lets the setup run and
-  lays its two lists out again as columns (labels x 70, values x 330, twelve rows from y 64, 27
+  lays its two lists out again as columns (labels x 70, values x 330, twelve rows from y 64, 27 (thirteen 25 apart with Renderer)
   apart: the game's own key-binding pages are denser), the values list holding one item per row
   (its selection, the page's row, highlighted as the Audio page's Output row); video_update is
   0x6617a7 in C with its calls in order (the +0x2d4 list's input, back's writes, the gamma calls
@@ -365,6 +366,20 @@ Steps:
    once, pipelines made at load).
 Where: the T7 for builds, image runs and comparisons (game files copied there once, with Ant's OK);
 final speed and look on the Win Max.
+Round 1 (2026-10-29; VULKAN.md is the renderer's own handoff): done as planned, with these findings.
+- The test route makes **no shaders at all** [verified: the inventory, VULKAN.md 1]: the "~5 vertex /
+  ~8 pixel shaders" above was a guess from the constant counts (the game sets c0-c13 per object with
+  no shader bound). Everything is fixed function: the uber-shaders are runtime/shaders/ff.vert and
+  ff.frag (DXVK 3.1.1's, their run-time state turned into specialization constants from the state
+  key), the per-draw values a block in the ring. tools/d3d2spv.py is brought over for the shaders the
+  game's D3DX makes from text (Shaders/SH_BackgroundShadow: some other level).
+- The device must answer as DXVK's: our first CheckDeviceFormat accepted D32, and the game took D32
+  for its depth buffer where DXVK's gave D24X8 (memory differed); fixed with DXVK's rules (ETM_DUMP_CAPS
+  diffs both renderers' answers).
+- d3d9_msaa.c never engages here: the game draws its 3D straight into the back buffer, which the
+  twins leave alone, so Anti-Aliasing (4x by default) does nothing in this game under either renderer
+  [verified: no "antialiasing" lines in the logs]. Left for the drawing side (not this round).
+- Options > Video got its thirteenth row, Renderer (DXVK / Vulkan, on restart); the rows are 25 apart.
 
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/etm12.py; first translator run; Miles

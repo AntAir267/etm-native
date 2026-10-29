@@ -400,6 +400,7 @@ static __thread int pend_kind;          /* 1 vs, 2 ps, 3 declaration */
 static __thread uint64_t pend_hash;
 static __thread uint32_t pend_ver;
 static __thread char *pend_text;
+static __thread char pend_check[160];  /* an IDirect3D9 check: counted with its answer after the call */
 
 void d3dinv_call(CPU *c, const char *n)
 {
@@ -576,9 +577,16 @@ void d3dinv_call(CPU *c, const char *n)
         desc_of(a1, &s);
         count("COPY %s %s %ux%u", m, fmt_name(s.fmt), s.w, s.h);
     } else if (!strncmp(n, "IDirect3D9::", 12) && !strcmp(m, "CheckDeviceFormat")) {
-        count("CHECKFORMAT adapterfmt %s usage %x rtype %s fmt %s", fmt_name(a3), a4, rtype_name(a5), fmt_name(a6));
+        snprintf(pend_check, sizeof pend_check, "CHECKFORMAT adapterfmt %s usage %x rtype %s fmt %s", fmt_name(a3), a4,
+                 rtype_name(a5), fmt_name(a6));
     } else if (!strncmp(n, "IDirect3D9::", 12) && !strcmp(m, "CheckDeviceMultiSampleType")) {
-        count("CHECKMS fmt %s ms %u", fmt_name(a3), a5);
+        snprintf(pend_check, sizeof pend_check, "CHECKMS fmt %s windowed %u ms %u", fmt_name(a3), a4, a5);
+    } else if (!strncmp(n, "IDirect3D9::", 12) && !strcmp(m, "CheckDeviceType")) {
+        snprintf(pend_check, sizeof pend_check, "CHECKTYPE adapterfmt %s backbuffer %s windowed %u", fmt_name(a3),
+                 fmt_name(a4), a5);
+    } else if (!strncmp(n, "IDirect3D9::", 12) && !strcmp(m, "CheckDepthStencilMatch")) {
+        snprintf(pend_check, sizeof pend_check, "CHECKDSMATCH adapterfmt %s target %s depth %s", fmt_name(a3),
+                 fmt_name(a4), fmt_name(a5));
     } else if (!strncmp(n, "IDirect3DQuery9::", 17) && !strcmp(m, "Issue")) {
         count("QUERY Issue flags %x", a1);
     }
@@ -588,7 +596,12 @@ void d3dinv_call(CPU *c, const char *n)
 
 void d3dinv_after(CPU *c)
 {
-    (void)c;
+    if (pend_check[0]) {
+        pthread_mutex_lock(&ilock);
+        count("%s -> %s", pend_check, c->eax ? "no" : "ok");
+        pthread_mutex_unlock(&ilock);
+        pend_check[0] = 0;
+    }
     if (!pend_kind) return;
     pthread_mutex_lock(&ilock);
     uint32_t g = pend_out ? R32(pend_out) : 0;
