@@ -276,6 +276,7 @@ pitch aligned to 4 as DXVK's (the program allocates its copies by the pitch: sam
   smaller pieces: only the lights and matrices that changed, pipelines made at load).
 - The rest of the game: driving and hovercraft levels, other beats (need saves); shaders any of them
   make (SH_BackgroundShadow: check d3dasm's bytes against D3DX's, ETM_D3D_INV captures them).
+- Threads: the game draws from a second thread at two moments, one frame at 0.85 s (thread 2) and the frames during a level's load (thread 21, 9 frames in the city drive), and the main thread draws no frames meanwhile [verified: frame logs, work/drive/rt/ant/log.txt; the Deck's run logs the same warning]. The renderer's device code has no locks. Whether the main thread makes device calls (textures, buffers) while the other draws is unchecked [guess: it may, during a load]; no crash from it so far, on the Win Max or on the Deck's one 40 s run to the menu. Log every device call's thread during a load before making the Vulkan renderer the default.
 - Fixed-function features not met yet (2.3's list): vertex blending, clip planes, flat shading.
 - Gamma: SetGammaRamp is kept and given back, not applied. The game sets one at the start that is the
   identity but for rounding (entry 64 is 16447, the identity's 16448; 128: 32895 for 32896; 255:
