@@ -574,6 +574,23 @@ void levels_install(void)
     }
 }
 
+/* the type of the load point running (LP_TYPE: 0 on foot, 1 / 2 driving, 4 / 5 hovercraft, 7 arena),
+   read from the game's table at the world's level and load point; -1 when there is none (prompts.c:
+   which bindings the tips' FIRE, ACCELERATE... name) */
+int levels_point_type(void)
+{
+    uint32_t w = world();
+    if (!w || !R32(W_LEVELS(w)))
+        return -1;
+    uint32_t g = R32(W_LEVEL(w)), p = R32(W_LOADPOINT(w));
+    if (g >= R32(W_NLEVELS(w)) || g >= 64)
+        return -1;
+    uint32_t rec = R32(W_LEVELS(w)) + 8u * g;
+    if (p >= R32(rec) || !R32(rec + 4))
+        return -1;
+    return (int)R32(R32(rec + 4) + LP_SIZE * p + LP_TYPE);
+}
+
 /* ------------------------------------------------------------------ each frame */
 static void debug_frame(unsigned long frame);
 

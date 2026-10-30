@@ -250,6 +250,8 @@ static void send_start(void)
     if (h != sent) {
         sent = h;
         input_key(DIK_ESCAPE, h);
+        if (h)
+            input_used(1);              /* (the key it presses is still the controller's: prompts.c) */
     }
 }
 
@@ -319,6 +321,7 @@ void pad_button(int slot, int button, int down)
             if (dik) {
                 keyed[slot][k] = (uint8_t)dik;
                 input_key(dik, 1);
+                input_used(1);          /* (a key the controller presses: the controller was used) */
             }
         } else if (!down && keyed[slot][k]) {
             input_key(keyed[slot][k], 0);

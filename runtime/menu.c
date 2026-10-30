@@ -5,7 +5,7 @@
    - Video (title menu > Options > Video): Subtitles, then Display, Resolution, V-Sync, Frame Rate,
      Frame Limit, Anti-Aliasing, Anisotropic Filtering, HUD, Movies, Cut Scenes, Menus, Renderer
      (DXVK / our own Vulkan renderer: VULKAN.md; on restart).
-   - Controls: Vibration after Fighting, Driving, Hovercraft, Mouse.
+   - Controls: Vibration and Button Prompts (prompts.c) after Fighting, Driving, Hovercraft, Mouse.
 
    THE GAME'S MENUS [verified: disassembly of the functions named, frames of the pages]. The Options
    screen (a 0x7028-byte object, constructor 0x65c06a; the front end's per-frame 0x65c246 runs state
@@ -14,8 +14,10 @@
      +0x04 the selected item, +0x0c..+0x83 its look (a 0x78-byte block copied in by 0x5f9ca0: +0x30 x,
      +0x34 y on the 640 x 448 design, +0x3c text height 22, +0x40 20, +0x4c..+0x58 colour 160,160,160,
      255, +0x5c width, +0x64 the spacing of a row laid out across (0: a column), +0x68 the spacing of
-     a column's rows), +0x78 flags (0x6574ca(n, on): n = 2 is 0x10, "active": highlights the
-     selection when the state is 0), +0x84 the items (a linked list of 0x18-byte nodes; 0x6554fc
+     a column's rows), +0x78 flags (the look's +0x6c; 0x6574ca(n, on) sets bit 2, 0x10, 1, 0x22, 0x40,
+     0x100, 0x200 for n = 0..6 (0x65548e's table) [verified: the table read, 2026-10-30]: n = 2, bit 1,
+     places the items by the spacings above (without it they follow each other along the line) and
+     highlights the selection when the state is 0), +0x84 the items (a linked list of 0x18-byte nodes; 0x6554fc
      adds {look or 0, UTF-16 text}, copying the text), +0x88 their count, +0x8c the state
      (0x5f9ce0: 0 shown with its highlight, 2 leaving, 3 shown without). 0x657401 empties it,
      0x6577af selects, 0x656962 draws it, 0x6559be runs its own input (a row across: left and right).
@@ -39,9 +41,11 @@
 
    The Controls page (0x66c752 builds +0x214: Fighting, Driving, Hovercraft, Mouse; 0x66e9bf runs it
    through the list's own input, 0x6559be, Enter opening a sub-page; 0x66eab0 draws +0x214 in the
-   front end): Vibration is a fifth label, its value (On / Off) a one-item list in +0x394 (not used
-   by the Controls pages) drawn after the page; left / right on it toggles option rumble (Enter on
-   it does nothing, as on any row past the page's four).
+   front end): Vibration and Button Prompts are a fifth and sixth label (the labels' rows 56 apart
+   instead of 70, so six fit), their values (On / Off; Auto / Keyboard / Controller) a two-item
+   column in +0x394 (not used by the Controls pages) drawn after the page; left / right on them
+   changes option rumble / button_prompts (Enter on them does nothing, as on any row past the
+   page's four).
    The pause menu's Controls (the same class, made by 0x61db35 as [0x97d250]) is left as it is.
 
    Each change is set (option_set), saved (options_save) and applied where the code allows (the
@@ -164,6 +168,10 @@ static const Setting video_rows[] = {
 
 static const Setting vibration_row =
     {"Vibration", "rumble", {"off", "on"}, {NULL}, 0, win_rumble_option};
+extern void prompts_option_changed(void);
+static const Setting prompts_row =      /* prompts.c, DESIGN.md decision 13 */
+    {"Button Prompts", "button_prompts", {"auto", "keyboard", "controller"}, {"Auto", "Keyboard", "Controller"}, 0,
+     prompts_option_changed};
 
 /* a setting's value in force, canonical (as its readers take it: see each reader) */
 static void canonical(const Setting *s, const char *v, char *out, size_t n)
@@ -220,6 +228,8 @@ static void canonical(const Setting *s, const char *v, char *out, size_t n)
         snprintf(out, n, "%s", v && !strcasecmp(v, "stretch") ? "stretch" : "center");
     else if (!strcmp(k, "renderer"))            /* d3d9.c Direct3DCreate9: vulkan, else DXVK */
         snprintf(out, n, "%s", v && !strcasecmp(v, "vulkan") ? "vulkan" : "dxvk");
+    else if (!strcmp(k, "button_prompts"))      /* prompts.c: keyboard, controller, else auto */
+        snprintf(out, n, "%s", v && !strcasecmp(v, "keyboard") ? "keyboard" : v && !strcasecmp(v, "controller") ? "controller" : "auto");
     else
         snprintf(out, n, "%s", v ? v : "");
 }
@@ -427,12 +437,17 @@ static int hook_video_update_fn(CPU *c)
 }
 
 /* ------------------------------------------------------------------ the Controls page */
-#define C_ROW       4                           /* Vibration: after Fighting, Driving, Hovercraft, Mouse */
+/* Vibration and Button Prompts after Fighting, Driving, Hovercraft, Mouse: the labels' rows closer
+   together (the game's are 70 apart, which leaves room for five), the two values a column of their
+   own at x 300 */
+#define C_ROW       4                           /* Vibration; Button Prompts is the next */
+#define C_ROWS      (C_ROW + 2)
+#define C_SPACING   56
 #define C_VALUE_X   300
 
 static int controls_ours(uint32_t scr)
 {
-    return scr != R32(0x97d250) && R32(L_COUNT(SCR_LABELS(scr))) == C_ROW + 1;
+    return scr != R32(0x97d250) && R32(L_COUNT(SCR_LABELS(scr))) == C_ROWS;
 }
 
 static void controls_value(CPU *c, uint32_t scr)
@@ -441,6 +456,8 @@ static void controls_value(CPU *c, uint32_t scr)
     char t[64];
     game_callm(c, LIST_CLEAR, vl, 0);
     shown(c, scr, &vibration_row, -1, t, sizeof t);
+    list_add(c, vl, wtext(t));
+    shown(c, scr, &prompts_row, -1, t, sizeof t);
     list_add(c, vl, wtext(t));
     game_callm(c, LIST_SELECT, vl, 1, 0);
 }
@@ -454,16 +471,22 @@ static int hook_controls_setup_fn(CPU *c)
     uint32_t ret = c->ret, eax = c->eax;
     uint32_t lb = SCR_LABELS(scr), vl = SCR_VALUES(scr);
     list_add(c, lb, game_callm(c, TEXT_GET, SCR_TEXT(scr), 2, 28, 0));
-    /* its value: the labels' look at the value column, on the fifth row, never highlighted */
+    list_add(c, lb, wtext(prompts_row.label));
+    W32(L_LOOK(lb, 0x68), C_SPACING);
+    /* the values: the labels' look at the value column, from the fifth row, never highlighted */
     uint32_t f = dc_frame(c, 0x78);
     memcpy(gptr(f), gptr(L_LOOK(lb, 0)), 0x78);
     W32(f + 0x30, C_VALUE_X);
-    W32(f + 0x34, R32(f + 0x34) + C_ROW * R32(f + 0x68));
+    W32(f + 0x34, R32(f + 0x34) + C_ROW * C_SPACING);
     W32(f + 0x2c, 0);
+    W32(f + 0x64, 0);                           /* (a column) */
+    W32(f + 0x68, C_SPACING);
     game_callm(c, LIST_CLEAR, vl, 0);
     game_callm(c, LIST_LOOK, vl, 1, f);
     dc_unframe(c, f, 0x78);
-    game_callm(c, LIST_FLAG, vl, 2, 2, 0);
+    /* (flag 1 of +0x78, the look's +0x6c, kept from the labels': items placed by the row spacing, a
+       column [verified: 0x656962 tests it; without it items follow each other along the line]; state
+       3 draws no highlight) */
     game_callm(c, LIST_STATE, vl, 1, 3);
     controls_value(c, scr);
     c->ret = ret;
@@ -474,11 +497,12 @@ static int hook_controls_setup_fn(CPU *c)
 static int hook_controls_update_fn(CPU *c)
 {
     uint32_t scr = c->ecx;
-    if (controls_ours(scr) && R32(L_SEL(SCR_LABELS(scr))) == C_ROW && R32(SCR_STATE(scr)) == 0xe) {
-        int lr = menu_key(c, scr, 2) || R32(JOY_DIR) == 0x13 || menu_key(c, scr, 3) || R32(JOY_DIR) == 0x11;
+    int row = (int)R32(L_SEL(SCR_LABELS(scr)));
+    if (controls_ours(scr) && row >= C_ROW && R32(SCR_STATE(scr)) == 0xe) {
+        int lr = menu_key(c, scr, 2) || R32(JOY_DIR) == 0x13 ? -1 : menu_key(c, scr, 3) || R32(JOY_DIR) == 0x11 ? 1 : 0;
         if (lr) {
             sound(c, 0x35d);
-            step(&vibration_row, 1);
+            step(row == C_ROW ? &vibration_row : &prompts_row, lr);
             controls_value(c, scr);
         }
         c->ecx = scr;

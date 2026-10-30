@@ -503,6 +503,8 @@ void game_init(void)
     menu_install();                     /* the port's settings in the game's Options pages (menu.c) */
     extern void levels_install(void);
     levels_install();                   /* the level loader: --level, Level Select (levels.c) */
+    extern void prompts_install(void);
+    prompts_install();                  /* the controller's buttons in the game's prompts (prompts.c) */
     hook_settings_load = hook_settings_load_fn;
     hook_blit_draw = hook_blit_draw_fn;
     hook_projection = hook_projection_fn;
@@ -528,4 +530,6 @@ void game_frame(unsigned long frame)
     mss_frame();
     extern void levels_frame(unsigned long frame);
     levels_frame(frame);
+    extern void prompts_frame(void);
+    prompts_frame();
 }
