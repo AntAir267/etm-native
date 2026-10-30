@@ -291,7 +291,7 @@ Ant: "There are no settings in the settings menus." (GAME-GOALS.md: every settin
 own menu.) Title menu > Options > Video now has, under Subtitles: Display, Resolution, V-Sync,
 Frame Rate, Frame Limit, Anti-Aliasing, Anisotropic Filtering, HUD, Movies, Cut Scenes, Menus (and
 Renderer since 2026-10-29: decision 11);
-Options > Controls has Vibration under Fighting / Driving / Hovercraft / Mouse. All drawn,
+Options > Controls has Vibration (and Button Prompts: decision 13) under Fighting / Driving / Hovercraft / Mouse. All drawn,
 highlighted and moved through by the game's own list code [verified: frames at 640x480 and
 1280x720, options.txt rewritten by each change].
 - How the game builds its pages [verified: disassembly; frames]: the Options screen (0x7028 bytes,
@@ -474,6 +474,94 @@ backtrace when a matching file opens) on the level files]:
   - Load points started without a save have what the level gives (Ghost's P229 in the lobby, Niobe's
     pistol with 12 / 0 in the power plant); no inventory or story flags from earlier levels.
 
+### 13. Button prompts (Ant, 2026-10-29: "look into adding button prompts"; runtime/prompts.c)
+With a controller in use the game names the controller's buttons where it names its controls; with the
+keyboard and mouse everything is as the game has it. Option button_prompts = auto (default: the device
+used last, pad.c input_controller_last(), switching as the player changes device) | keyboard |
+controller; Options > Controls has the row (decision 10's page, now six rows 56 apart).
+Where the PC game shows its controls [verified: disassembly of the functions named, the text tables
+decoded (tools/txdump.py), frames]:
+- The Controls pages (Fighting / Driving / Hovercraft, front end and pause menu: draw functions 0x66ee7d,
+  0x66fabe, 0x670a4d, every frame) show each action's two bindings, keyboard / mouse at x 220 and
+  joystick at x 420, by name from 0x66c9c4(code) (via 0x66df54(action, slot): binding [0x97f844 +
+  action x 8 + slot x 4]): key names, "Mouse Button 1..6", "Wheel Up / Down" (-1..-8), "Joy Button
+  1..16" (-9..-24; TXeStc 551-566). The joystick column is filled only with a joystick present at
+  start-up (the game's defaults). Buttons 13-16 (-21..-24) are the D-pad's up, right, down, left
+  [verified: 0x7b4b78 sets input bytes +0x25c..+0x25f from POV 0 / 9000 / 18000 / 27000 +-2000].
+  Actions: Fighting 0-18 (Move Forward ... Weapon Select, in page order), Driving 0x14 0x15 0x18-0x1f
+  0x26, Hovercraft 0x20 0x21 0x16 0x17 0x22 0x23 0x25 0x24 (the pages' 0x66df54 calls), 0x13 Escape.
+  Hook key_name: with the controller, -9..-24 become "Y Button", "Right Trigger", "A Button", "B
+  Button", "Left Bumper", "Right Bumper", "Left Trigger", "X Button", (button 9 stays: not on the
+  pad), "Back Button", the game's own "Left / Right thumbstick button" (TXeStc 429 / 430), "D-pad
+  Up / Right / Down / Left" (pad.c's numbering; the page is drawn every frame, so it switches live).
+- The tutorial tips name controls by action in capitals ("Press FIRE to draw a weapon", "Use MOVEMENT to
+  walk", "Press PAUSE MENU..."): no key names and no placeholders in the texts, no such words in the
+  program [verified: strings], and nothing substitutes them [verified: frames with the keyboard]. Two
+  ways in: the popup in play (0x6089d0 fetches TX<l>IMT.bin's text through the HUD's text object
+  [0x97cef0]+0xfc once per tip, keeps it at HUD +0xd90 and copies at most 255 characters into the
+  popup with 0x657728), and the pause menu's Tips list (0x61f957 collects a level's tips from the same
+  object, keeping their addresses; "New tip -- STEERING" in the list). TXb* are not Xbox texts: they
+  are Brazilian Portuguese [verified: read], and the tables hold Xbox, PS2 and GameCube strings side by
+  side, so the consoles' tips were these words too [guess]; the labels Fighting, Driving, Hovercraft,
+  Niobe, Ghost, A-E in TX<l>FE.bin suggest a console controller page, whose builder would be 0x660eba
+  [guess], not reachable in the PC program (not in our translation) [verified: gen/]. Hook text_get (0x65526b(text object, id, out), thiscall, ret 8): for IMT's and IMF's
+  objects ([+0xf8]) each control word gets its button: "Press FIRE (RT) to draw a weapon", "MOVEMENT
+  (left stick up)" where the text already has "(up)", "THROW (Y+B)", "ENTER/EXIT 1ST PERSON (RS click
+  / D-pad Right)", from the binding table (remapped buttons show remapped); FIRE, ACCELERATE, BRAKE,
+  SWITCH VIEW take the driving or hovercraft binding in those levels (levels.c levels_point_type);
+  MOVEMENT / STEER / AIM are the left stick, STRAFE the right stick, WEAPON SELECT the D-pad, PAUSE
+  MENU Start (no bindings); SECONDARY WEAPON is Fire Secondary (action 5) and GRAB is Action (10)
+  [guess: from the names and the manual's "context-sensitive" Action]; TARGET LOCK has no binding on the
+  PC and stays as written. Titles (all capitals) are left alone; a tip that fits the popup's 255 gets
+  only the additions that still fit. Reworded texts are live: a buffer of ours per text, keeping a copy
+  of the game's words, is what the game gets once a controller has been used; prompts_frame rewrites the
+  buffers when the device, the bindings or the kind of level change, so the Tips list switches in place
+  [verified: frames of one tip page, keyboard press between] and a popup already on screen keeps its
+  words (its copy is made once). Before a controller is first used there are no buffers and the lookup
+  is the game's own. The words are English: other languages' tips are left as they are (the Controls page's names are
+  English too, as menu.c's labels, apart from the game's own thumbstick texts).
+- The HUD's context prompt (0x608128, each frame: the hand icon "icon_interact" with Hud2.bin's
+  ([0x97cef0]+0xd64) 110-122 Activate ... Open, Close, 161 Pick Up Parachute): with the controller the
+  Action binding's button follows, "Press Button (X)" [verified: frame].
+- Nothing else names controls: no button hints in the PC's menus [verified: frames of the language,
+  title, Options, Controls and pause pages; the difficulty and character pages not looked at]; the
+  hacking terminal is typed at, so "<Press Any Key>" stays [guess: its commands in TXeHack; it needs a
+  saved game, not run]; the console texts in Stc ("Press START to continue", "Press A to continue")
+  already name pad buttons [guess: not seen on the PC].
+Xbox button art in the PC's data [verified: decoded with tools/tex3d2.py: .3d2_42 texture table
+of 80-byte headers (width, height, Xbox format 0x0c DXT1 / 0x0f DXT5 / 0x12 linear ARGB, size with
+mips), pixel data after it]: Levels\frontend_XBOX.3d2_42, which the PC's front end loads, has
+"xbox_buttons" (the black D-pad and the red B, blue X, yellow Y, green A buttons, 128 x 64 DXT1),
+"icon_xbox_controller" (line drawing) and "hud_controller_xbox" (green controller, 256 x 256 DXT5);
+HUD_GRAPHICS has only the hand icons. No art for triggers, bumpers, Start, Back or the sticks, so the
+prompts are text in the game's own fonts (the same as its key names and tips), not glyphs.
+- pad.c: a key a controller button presses (A / B as Enter / Escape in menus, Start as Escape) set
+  "keyboard used last" (input_key); it now marks the controller again.
+- Checks: tests/ab.sh same (keyboard: the hooks return at once). The test route on this build with master's
+  db39e08 (test runs' display modes) applied for the comparison: all 691 memory and draw hashes equal
+  those of the main checkout's binary, so without a controller the prompts change nothing [verified].
+  Frames at 640x480 and 1280x720 of the
+  Controls pages, the tips and the context prompt with the keyboard and with the controller, and the
+  Fighting page switching keyboard -> controller -> keyboard within a run; the Tips list in the city
+  drive ("press ACCELERATE (A)", "BRAKE (LT)", "EMERGENCY BRAKE (X)", "ASSIST (B)": the driving bindings)
+  and back to the game's words on a key press; Action poked to button 4 reads "Press ACTION (B)" and
+  "Press Button (B)"; button_prompts = keyboard keeps the game's words with the controller in use; the row
+  changed from the controller, A doing nothing on it [verified: frames, options.txt].
+- Not done: glyphs. The A / B / X / Y and D-pad art could replace "(X)", but in play the HUD's texture
+  lookup ([0x97efb4]([0x97cee8], name), one container) has icon_interact and not xbox_buttons [verified:
+  called at run time, 0 returned], so it needs the art read from frontend_XBOX by us and a texture the 2D
+  list can use, and a way to find a marked character's glyph in the blit list; triggers, bumpers, Start,
+  Back and the sticks would still be text.
+- Not seen: the training levels through the loader (16.1 AITutorial1, 0.3 B0_TU dojo) showed no tips
+  in 1500 frames walking; the popups' IMF texts. A controller plugged in after start-up gets no joystick
+  defaults from the game (the column stays empty [verified: frame]), so its tips name only the sticks,
+  the D-pad and Start until the game is started with it.
+- Found (not fixed): with hud = corners on a wide screen HUD text splits where it crosses the anchor
+  limits (game.c anchor_of): at 1280x720 "Press ACTION      to press" and "Press B     utton" [verified:
+  frames, with the keyboard too, so not from the prompts]. The same frames with hud = center are whole [verified]; each glyph
+  seems to be anchored on its own (blit_layout joins only op 2 items into a line, in-game text being
+  op 12 [guess]). hud = corners is the default, so tips and the context prompt read badly on wide screens.
+
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/etm12.py; first translator run; Miles
   stand-in, ReadFileEx; first runs: the intro movies (Atari, Warner Bros., Shiny) play through
@@ -530,3 +618,6 @@ backtrace when a matching file opens) on the level files]:
   Load page does; tests/levels.sh sweep: 11 levels (on foot both characters, the city drive both ways,
   the aqueduct, the Logos pilot and gunner, two cut scenes) loaded, 1500 frames each, no crash, input
   works in all; tests/ab.sh same.
+- 2026-10-30: button prompts (decision 13, runtime/prompts.c): with a controller in use the Controls pages
+  name its buttons, tips say "Press ACTION (X)", the context prompt "Press Button (X)"; Options > Controls
+  row Button Prompts (Auto / Keyboard / Controller); the keyboard's prompts unchanged; tests/ab.sh same.

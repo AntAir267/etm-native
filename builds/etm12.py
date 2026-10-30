@@ -62,6 +62,12 @@ HOOKS = {
     # the way the Load page does
     0x65dec8: 'title_build',
     0x65e161: 'title_update',
+    # button prompts (runtime/prompts.c, DESIGN.md decision 13): a binding's name (the Controls
+    # pages' key names, "Joy Button N" for the joystick's) and the game's text lookup (every
+    # UTF-16 text of the Text\TX*.bin tables: tips, HUD prompts), where prompts.c names the
+    # controller's buttons while a controller is in use
+    0x66c9c4: 'key_name',
+    0x65526b: 'text_get',
 }
 
 # the drawing code's functions, each hookable for its rewrite (runtime/decomp/, decomp.h DECOMP)
