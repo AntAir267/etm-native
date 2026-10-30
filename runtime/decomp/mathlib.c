@@ -27,50 +27,40 @@
 static inline f80 LF(uint32_t a) { return (f80)RF32(a); }
 static inline void SF(uint32_t a, f80 v) { WF32(a, (float)v); }
 
-/* a C library function of one double: the float argument widened (fld dword; fstp qword), the
-   result left on the x87 stack as the original leaves it */
-static void crt_double(CPU *c, uint32_t fn, f80 x)
+/* a C library function of one double, in the original's frame (later code reads what is left on the
+   stack; the return address differs in memory otherwise, tests/ab_levels.sh on Lower Wacker and the
+   freeway): the float argument widened (fld dword; fstp qword), the result left on the x87 stack and
+   kept in a local as the original keeps it */
+static int crt_double(CPU *c, uint32_t e, uint32_t fn, uint32_t ret)
 {
-    double d = (double)x;
+    uint32_t fp = e - 4, ebp = c->ebp;
+    double d = (double)LF(e + 4);
     uint64_t b;
     memcpy(&b, &d, 8);
-    game_call(c, fn, 2, (uint32_t)b, (uint32_t)(b >> 32));
+    W32(fp, ebp);
+    W32(fp - 4, c->ecx);
+    c->ebp = fp;
+    c->esp = fp - 4;
+    game_call_at(c, ret, fn, 2, (uint32_t)b, (uint32_t)(b >> 32));
+    WF32(fp - 4, (float)ST(0));
+    c->ebp = ebp;
+    return decomp_ret(c, e, c->eax, 0);
 }
 
 /* 0x41e8d0 (float x) -> sqrt(x) on the x87 stack (cdecl). */
-static int dc_41e8d0(CPU *c)
-{
-    uint32_t e = c->esp;
-    crt_double(c, CRT_SQRT, LF(e + 4));
-    return decomp_ret(c, e, c->eax, 0);
-}
+static int dc_41e8d0(CPU *c) { return crt_double(c, c->esp, CRT_SQRT, 0x41e8e2u); }
 DECOMP(41e8d0, dc_41e8d0);
 
 /* 0x41f780 (float x) -> acos(x) on the x87 stack (cdecl). */
-static int dc_41f780(CPU *c)
-{
-    uint32_t e = c->esp;
-    crt_double(c, CRT_ACOS, LF(e + 4));
-    return decomp_ret(c, e, c->eax, 0);
-}
+static int dc_41f780(CPU *c) { return crt_double(c, c->esp, CRT_ACOS, 0x41f792u); }
 DECOMP(41f780, dc_41f780);
 
 /* 0x62f3e0 (float x) -> sin(x) on the x87 stack (cdecl). */
-static int dc_62f3e0(CPU *c)
-{
-    uint32_t e = c->esp;
-    crt_double(c, CRT_SIN, LF(e + 4));
-    return decomp_ret(c, e, c->eax, 0);
-}
+static int dc_62f3e0(CPU *c) { return crt_double(c, c->esp, CRT_SIN, 0x62f3f2u); }
 DECOMP(62f3e0, dc_62f3e0);
 
 /* 0x62f410 (float x) -> cos(x) on the x87 stack (cdecl). */
-static int dc_62f410(CPU *c)
-{
-    uint32_t e = c->esp;
-    crt_double(c, CRT_COS, LF(e + 4));
-    return decomp_ret(c, e, c->eax, 0);
-}
+static int dc_62f410(CPU *c) { return crt_double(c, c->esp, CRT_COS, 0x62f422u); }
 DECOMP(62f410, dc_62f410);
 
 /* Constructors that leave the object as it is and return it: 0x41e940 (vec3), 0x47f630 (4x4

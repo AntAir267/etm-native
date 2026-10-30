@@ -74,6 +74,11 @@ static int dc_6be059(CPU *c)
 }
 DECOMP(6be059, dc_6be059);
 
+/* the original's locals in their places, off its frame pointer fp: later code reads what a function
+   leaves on the stack (tests/ab_levels.sh, 2026-10-30) */
+#define LOC(off, v) W32(fp - (off), (uint32_t)(v))
+#define LOCF(off, v) WF32(fp - (off), (v))
+
 /* 0x6be1e9 (path *p, vec3 *out, float t) (cdecl): the point at t on a smooth curve through the
    path: four weights w0..w3 of the points from the position u within the segment, reshaped by a
    cubic when the neighbouring segments' lengths differ (r, the ratio, below 1), then
@@ -81,14 +86,18 @@ DECOMP(6be059, dc_6be059);
    blend; the weights sum to 1] */
 static int dc_6be1e9(CPU *c)
 {
-    uint32_t e = c->esp, p = ARG(0), out = ARG(1);
+    uint32_t e = c->esp, p = ARG(0), out = ARG(1), fp = e - 4;
     f80 t = LF(e + 12);
     float w0, w1, w2, w3;
+    W32(fp, c->ebp);
     if (LI(p + 4) > t) {
         /* the first segment */
-        float u = (float)((t - LI(p)) / (f80)(int32_t)(R32(p + 4) - R32(p)));
+        int32_t da = (int32_t)(R32(p + 4) - R32(p)), db = (int32_t)(R32(p + 8) - R32(p + 4));
+        float u = (float)((t - LI(p)) / (f80)da);
         float one = 1.0f;
-        float r = (float)((f80)(int32_t)(R32(p + 4) - R32(p)) / (f80)(int32_t)(R32(p + 8) - R32(p + 4)));
+        float r = (float)((f80)da / (f80)db);
+        LOC(0x48, da); LOC(0x4c, da); LOC(0x50, db);
+        LOCF(0x24, one); LOCF(0x1c, r);
         if ((f80)r < LF(F_ONE)) {
             f80 a = ((f80)r + (f80)one - LF(F_TWO)) * (f80)u * (f80)u * (f80)u;
             f80 b = (f80)r - (f80)one;
@@ -96,18 +105,23 @@ static int dc_6be1e9(CPU *c)
             f80 dd = (b - cc) / LF(F_TWO) * (f80)u * (f80)u;
             u = (float)(a + dd + (f80)one * (f80)u);
         }
+        LOCF(0x20, u);
         float h = (float)((f80)u / LF(F_TWO));
         f80 v = LF(F_ONE) - (f80)h;
         float g = (float)v;
+        LOCF(0x18, h); LOCF(0x14, g);
         w0 = (float)(v * (f80)g - (f80)g * (f80)h);
         w1 = (float)(LF(F_FOUR) * (f80)g * (f80)h);
         w2 = (float)((f80)h * (f80)h - (f80)g * (f80)h);
         w3 = 0;
     } else if (LI(p + 8) < t) {
         /* the last segment */
-        float u = (float)((t - LI(p + 8)) / (f80)(int32_t)(R32(p + 12) - R32(p + 8)));
-        float r = (float)((f80)(int32_t)(R32(p + 12) - R32(p + 8)) / (f80)(int32_t)(R32(p + 8) - R32(p + 4)));
+        int32_t da = (int32_t)(R32(p + 12) - R32(p + 8)), db = (int32_t)(R32(p + 8) - R32(p + 4));
+        float u = (float)((t - LI(p + 8)) / (f80)da);
+        float r = (float)((f80)da / (f80)db);
         float one = 1.0f;
+        LOC(0x54, da); LOC(0x58, da); LOC(0x5c, db);
+        LOCF(0x30, r); LOCF(0x28, one);
         if ((f80)r < LF(F_ONE)) {
             f80 a = ((f80)one + (f80)r - LF(F_TWO)) * (f80)u * (f80)u * (f80)u;
             f80 b = (f80)one - (f80)r;
@@ -117,17 +131,22 @@ static int dc_6be1e9(CPU *c)
         }
         if ((f80)u > LF(F_ONE))
             u = 1.0f;
+        LOCF(0x2c, u);
         float h = (float)((f80)u / LF(F_TWO) + LF(F_HALF));
         float g = (float)(LF(F_ONE) - (f80)h);
+        LOCF(0x18, h); LOCF(0x14, g);
         w0 = 0;
         w1 = (float)((f80)g * (f80)g - (f80)g * (f80)h);
         w2 = (float)(LF(F_FOUR) * (f80)g * (f80)h);
         w3 = (float)((f80)h * (f80)h - (f80)g * (f80)h);
     } else {
         /* the middle segment: the halves of two blends */
-        float u = (float)((t - LI(p + 4)) / (f80)(int32_t)(R32(p + 8) - R32(p + 4)));
-        float ra = (float)((f80)(int32_t)(R32(p + 8) - R32(p + 4)) / (f80)(int32_t)(R32(p + 4) - R32(p)));
-        float rb = (float)((f80)(int32_t)(R32(p + 8) - R32(p + 4)) / (f80)(int32_t)(R32(p + 12) - R32(p + 8)));
+        int32_t d0 = (int32_t)(R32(p + 4) - R32(p)), d1 = (int32_t)(R32(p + 8) - R32(p + 4)),
+                d2 = (int32_t)(R32(p + 12) - R32(p + 8));
+        float u = (float)((t - LI(p + 4)) / (f80)d1);
+        float ra = (float)((f80)d1 / (f80)d0);
+        float rb = (float)((f80)d1 / (f80)d2);
+        LOC(0x60, d1); LOC(0x64, d1); LOC(0x68, d0); LOC(0x6c, d1); LOC(0x70, d2);
         if ((f80)ra < LF(F_ONE) || (f80)rb < LF(F_ONE)) {
             if ((f80)ra > LF(F_ONE))
                 ra = 1.0f;
@@ -139,20 +158,24 @@ static int dc_6be1e9(CPU *c)
             f80 dd = (b - cc) / LF(F_TWO) * (f80)u * (f80)u;
             u = (float)(a + dd + (f80)ra * (f80)u);
         }
+        LOCF(0x44, ra); LOCF(0x34, rb); LOCF(0x38, u);
         float m = u;
         f80 v = LF(F_ONE) - (f80)m;
         float n = (float)v;
         float h = (float)(v / LF(F_TWO));
         float g = (float)(LF(F_ONE) - (f80)h);
+        LOCF(0x3c, m); LOCF(0x40, n);
         w0 = (float)(((f80)h * (f80)h - (f80)h * (f80)g) * (f80)n);
         w1 = (float)(LF(F_FOUR) * (f80)h * (f80)g * (f80)n);
         w2 = (float)(((f80)g * (f80)g - (f80)h * (f80)g) * (f80)n);
         h = (float)((f80)h + LF(F_HALF));
         g = (float)(LF(F_ONE) - (f80)h);
+        LOCF(0x14, h); LOCF(0x18, g);
         w1 = (float)(((f80)h * (f80)h - (f80)h * (f80)g) * (f80)m + (f80)w1);
         w2 = (float)(LF(F_FOUR) * (f80)h * (f80)g * (f80)m + (f80)w2);
         w3 = (float)(((f80)g * (f80)g - (f80)h * (f80)g) * (f80)m);
     }
+    LOCF(4, w0); LOCF(8, w1); LOCF(0xc, w2); LOCF(0x10, w3);
     for (uint32_t i = 0; i < 3; i++)
         SF(out + 4 * i, (f80)w0 * LF(p + PATH_POINT(0) + 4 * i) + (f80)w1 * LF(p + PATH_POINT(1) + 4 * i)
                         + (f80)w2 * LF(p + PATH_POINT(2) + 4 * i) + (f80)w3 * LF(p + PATH_POINT(3) + 4 * i));
@@ -347,8 +370,6 @@ static int dc_6d7210(CPU *c)
        the stack (the city drive: a record's float was -0.25 after the original, -209 after a
        rewrite with its locals elsewhere [verified: tests of 2026-10-30, memory at frame 1250]) */
     uint32_t fp = e - 4, ebp = c->ebp;
-#define LOC(off, v) W32(fp - (off), (uint32_t)(v))
-#define LOCF(off, v) WF32(fp - (off), (v))
 #define KEY_RET(n) do { c->ebp = ebp; return decomp_ret(c, e, (n), 0); } while (0)
     W32(fp, ebp);
     c->ebp = fp;
@@ -439,8 +460,6 @@ static int dc_6d7210(CPU *c)
     LOC(0x9c, bits);
     quat_place(out, 3 - bits, a, b, d, w);    /* bits 0: w last; 1: third; 2: second; 3: first */
     KEY_RET(12);
-#undef LOC
-#undef LOCF
 #undef KEY_RET
 }
 DECOMP(6d7210, dc_6d7210);
@@ -476,25 +495,35 @@ DECOMP(6d7210, dc_6d7210);
    of 0xff ends the stream. eax as the original leaves it. */
 static int dc_6c1606(CPU *c)
 {
-    uint32_t e = c->esp, ch = c->ecx, eax = ch;
-    if (!R32(ch + CH_ANIM))
+    uint32_t e = c->esp, ch = c->ecx, eax = ch, fp = e - 4, ebp = c->ebp;
+    W32(fp, ebp);
+    c->ebp = fp;
+    c->esp = fp - 0x1c;
+    LOC(0x1c, ch);
+    if (!R32(ch + CH_ANIM)) {
+        c->ebp = ebp;
         return decomp_ret(c, e, eax, 0);
+    }
     int32_t fmt = (int16_t)R16(R32(ch + CH_ANIM) + ANIM_FORMAT);
+    LOC(8, fmt);
     FPUSH(LX(ch + CH_TIME));
-    int32_t frame = (int32_t)game_call(c, CRT_FTOL, 0);
+    int32_t frame = (int32_t)game_call_at(c, 0x6c1634u, CRT_FTOL, 0);
     if (frame > (int16_t)R16(R32(ch + CH_ANIM) + ANIM_FRAMES) - 1)
         frame = (int16_t)R16(R32(ch + CH_ANIM) + ANIM_FRAMES) - 1;
+    LOC(4, frame);
     eax = R32(ch + CH_DECODED) - 1;
     if (frame < (int32_t)eax)
-        eax = game_callm(c, CH_REWIND, ch, 0);
+        c->ecx = ch, eax = game_call_at(c, 0x6c166fu, CH_REWIND, 0);
     while (frame >= (int32_t)R32(ch + CH_DECODED)) {
         eax = ch;
         if (R8(R32(ch + CH_STREAM)) == 0xff)
             break;
         int32_t n = (int32_t)R8(R32(ch + CH_STREAM));
+        LOC(0xc, n);
         W32(ch + CH_STREAM, R32(ch + CH_STREAM) + 1);
-        for (; n > 0; n--) {
+        for (; n > 0; LOC(0xc, --n)) {
             uint32_t track = R8(R32(ch + CH_STREAM));
+            LOC(0x14, track);
             W32(ch + CH_STREAM, R32(ch + CH_STREAM) + 1);
             uint32_t delta = R8(R32(ch + CH_STREAM));
             W32(ch + CH_STREAM, R32(ch + CH_STREAM) + 1);
@@ -503,19 +532,21 @@ static int dc_6c1606(CPU *c)
                 delta += R8(R32(ch + CH_STREAM));
                 W32(ch + CH_STREAM, R32(ch + CH_STREAM) + 1);
             }
+            LOC(0x10, delta);
             uint32_t w = R32(ch + CH_WINDOW(track));
+            LOC(0x18, w);
             W32(w, R32(w + 4));
             W32(w + 4, R32(w + 8));
             W32(w + 8, R32(w + 12));
             W32(w + 12, R32(w + 12) + delta);
-            game_call(c, CRT_MEMCPY, 3, w + 0x10, w + 0x20, 0x10);
-            game_call(c, CRT_MEMCPY, 3, w + 0x20, w + 0x30, 0x10);
-            game_call(c, CRT_MEMCPY, 3, w + 0x30, w + 0x40, 0x10);
+            game_call_at(c, 0x6c178cu, CRT_MEMCPY, 3, w + 0x10, w + 0x20, 0x10);
+            game_call_at(c, 0x6c17a4u, CRT_MEMCPY, 3, w + 0x20, w + 0x30, 0x10);
+            game_call_at(c, 0x6c17bcu, CRT_MEMCPY, 3, w + 0x30, w + 0x40, 0x10);
             uint32_t len;
             if (R8(R32(R32(ch + CH_ANIM) + ANIM_TRACKS) + TRACK_IS_POS(track)))
-                len = game_call(c, POS_KEY, 4, w + 0x40, R32(ch + CH_STREAM), w + 0x40, (uint32_t)fmt);
+                len = game_call_at(c, 0x6c17f3u, POS_KEY, 4, w + 0x40, R32(ch + CH_STREAM), w + 0x40, (uint32_t)fmt);
             else
-                len = game_call(c, ROT_KEY, 6, w + 0x40, R32(ch + CH_STREAM), w + 0x40, (uint32_t)fmt,
+                len = game_call_at(c, 0x6c1841u, ROT_KEY, 6, w + 0x40, R32(ch + CH_STREAM), w + 0x40, (uint32_t)fmt,
                                 (uint32_t)(int32_t)(int16_t)R16(R32(R32(ch + CH_ANIM) + ANIM_TRACKS) + TRACK_BONE(track)),
                                 R32(R32(ch + CH_OWNER) + CHAR_SKELETON));
             W32(ch + CH_STREAM, len + R32(ch + CH_STREAM));
@@ -523,6 +554,7 @@ static int dc_6c1606(CPU *c)
         W32(ch + CH_DECODED, R32(ch + CH_DECODED) + 1);
         eax = ch;
     }
+    c->ebp = ebp;
     return decomp_ret(c, e, eax, 0);
 }
 DECOMP(6c1606, dc_6c1606);
