@@ -511,8 +511,10 @@ backtrace when a matching file opens) on the level files]:
   joystick (buttons held on any, each stick from the controller pushing it furthest, rumble on
   all) [verified: scripted second controller walks Ghost]. (3) "can't skip the intro with a
   controller": the in-engine intro skips with Enter, which A pressed only in menus; A presses Enter
-  in cut scenes too (game.c game_cutscene: in game with the cinema bars up) [verified: A at frame
-  3200 instead of Enter, the route reaches the lobby in the same state]. (4) "no settings in the
+  in cut scenes too (game.c game_cutscene: in game with the cinema bars up). Correction
+  (2026-10-29, the level loader's sweep): Enter does not skip cut scenes, Escape does (the
+  route's lobby matched because the intro ends by itself, not because of the Enter at 3200);
+  A now presses Escape in cut scenes. (4) "no settings in the
   settings menus": the Video page has only Subtitles; the port's options go into the game's own
   menus (helper in a worktree, under way).
 - 2026-10-27: the port's settings in the game's own Options > Video and Controls pages (decision 10,

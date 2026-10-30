@@ -308,17 +308,21 @@ void pad_button(int slot, int button, int down)
         send_start();
         return;
     }
-    /* in menus A is Enter and B Escape too, and in cut scenes A is Enter (it skips them); the
-       button pressed is the one released */
+    /* in menus A is Enter and B Escape too; in cut scenes A is Escape, which skips them (Enter
+       does not [verified: the level loader's sweep, 2026-10-29: six Enter presses left the New
+       Game scene running, Escape ended it]); the key pressed is the one released */
     if (button == PAD_A || button == PAD_B) {
-        static uint8_t keyed[INPUT_MAX_JOYS][2];
-        int k = button == PAD_B, dik = k ? DIK_ESCAPE : DIK_RETURN;
-        if (down && (front_end() || (!k && game_cutscene()))) {
-            keyed[slot][k] = 1;
-            input_key(dik, 1);
+        static uint8_t keyed[INPUT_MAX_JOYS][2];   /* the key a held A / B pressed, or 0 */
+        int k = button == PAD_B;
+        if (down && !keyed[slot][k]) {
+            int dik = front_end() ? (k ? DIK_ESCAPE : DIK_RETURN) : !k && game_cutscene() ? DIK_ESCAPE : 0;
+            if (dik) {
+                keyed[slot][k] = (uint8_t)dik;
+                input_key(dik, 1);
+            }
         } else if (!down && keyed[slot][k]) {
+            input_key(keyed[slot][k], 0);
             keyed[slot][k] = 0;
-            input_key(dik, 0);
         }
     }
     if (button >= PAD_DUP && button <= PAD_DRIGHT) {

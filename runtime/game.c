@@ -478,7 +478,7 @@ int game_front_end(void)
 }
 
 /* an in-engine cut scene: in game with the cinema bars up ([0x97f238], their height in pixels: see
-   IN-ENGINE SCENES above); the controller's A presses Enter then, which skips them (pad.c) */
+   IN-ENGINE SCENES above); the controller's A presses Escape then, which skips them (pad.c) */
 int game_cutscene(void)
 {
     uint32_t screen = R32(0x97ed80);
