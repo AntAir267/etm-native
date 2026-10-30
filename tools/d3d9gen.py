@@ -24,6 +24,7 @@ CLASSES = [i for i in IFACES if i not in ('IDirect3DResource9', 'IDirect3DBaseTe
 SPECIAL = {
     '*::QueryInterface', '*::AddRef', '*::Release',
     'IDirect3D9::CreateDevice', 'IDirect3D9::GetAdapterMonitor', 'IDirect3D9::RegisterSoftwareDevice',
+    'IDirect3D9::GetAdapterModeCount', 'IDirect3D9::EnumAdapterModes', 'IDirect3D9::GetAdapterDisplayMode',
     'IDirect3DDevice9::Reset', 'IDirect3DDevice9::CreateAdditionalSwapChain',
     'IDirect3DDevice9::GetCreationParameters', 'IDirect3DDevice9::Present',
     'IDirect3DDevice9::GetNPatchMode',

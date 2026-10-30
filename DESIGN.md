@@ -530,3 +530,11 @@ backtrace when a matching file opens) on the level files]:
   Load page does; tests/levels.sh sweep: 11 levels (on foot both characters, the city drive both ways,
   the aqueduct, the Logos pilot and gunner, two cut scenes) loaded, 1500 frames each, no crash, input
   works in all; tests/ab.sh same.
+- 2026-10-29: test runs no longer see the host's screens. The renderer (DXVK, and ours copying it)
+  listed the first screen's display modes, and the game keeps that list in memory, so an A/B
+  baseline saved with three screens plugged in stopped matching with one (frame 10, six calls
+  fewer). Under --test, IDirect3D9 GetAdapterModeCount / EnumAdapterModes /
+  GetAdapterDisplayMode answer a fixed list (640x480 .. 2560x1600 at 60 Hz) and a 1920x1080
+  desktop (d3d9.c, d3d9gen.py SPECIAL); normal play asks the renderer as before. tests/ab.sh
+  --fresh: same.
+

@@ -480,6 +480,59 @@ HOSTFN(sp_IDirect3D9_CreateDevice, 7)
     return r;
 }
 
+/* THE DISPLAY MODES: the renderer (DXVK, or ours copying it) lists the first screen's modes, so a
+   test run saw whichever monitors were plugged in, and its memory followed (the game keeps the
+   list): an A/B baseline saved with three screens connected no longer matched with one
+   [verified: 2026-10-29, the level loader's finding; frame 10, six calls fewer]. Under --test
+   the modes are a fixed list and the desktop 1920x1080 at 60 Hz (as host_desktop_size says for
+   test runs); otherwise the renderer's answers. */
+static const uint16_t test_modes[][2] = {
+    {640, 480}, {800, 600}, {1024, 768}, {1152, 864}, {1280, 720}, {1280, 768}, {1280, 800}, {1280, 960},
+    {1280, 1024}, {1360, 768}, {1366, 768}, {1440, 900}, {1600, 900}, {1600, 1200}, {1680, 1050},
+    {1920, 1080}, {1920, 1200}, {2560, 1440}, {2560, 1600}};
+#define NTEST_MODES ((UINT)(sizeof test_modes / sizeof *test_modes))
+static int test_mode_format(D3DFORMAT f) { return f == D3DFMT_X8R8G8B8 || f == D3DFMT_A8R8G8B8; }
+
+HOSTFN(sp_IDirect3D9_GetAdapterModeCount, 3)
+{
+    if (deterministic)
+        return ARG(1) == 0 && test_mode_format((D3DFORMAT)ARG(2)) ? NTEST_MODES : 0;
+    void *self = d3d_host(ARG(0));
+    return (uint32_t)((UINT (*)(void *, UINT, D3DFORMAT))VT(self)[6])(self, (UINT)ARG(1), (D3DFORMAT)ARG(2));
+}
+
+HOSTFN(sp_IDirect3D9_EnumAdapterModes, 5)
+{
+    if (deterministic) {
+        if (ARG(1) != 0 || !test_mode_format((D3DFORMAT)ARG(2)) || ARG(3) >= NTEST_MODES || !ARG(4))
+            return D3DERR_INVALIDCALL;
+        D3DDISPLAYMODE m = {test_modes[ARG(3)][0], test_modes[ARG(3)][1], 60, (D3DFORMAT)ARG(2)};
+        memcpy((void *)(uintptr_t)ARG(4), &m, sizeof m);
+        return D3D_OK;
+    }
+    void *self = d3d_host(ARG(0));
+    uint32_t r = (uint32_t)((HRESULT (*)(void *, UINT, D3DFORMAT, UINT, D3DDISPLAYMODE *))VT(self)[7])(
+        self, (UINT)ARG(1), (D3DFORMAT)ARG(2), (UINT)ARG(3), (D3DDISPLAYMODE *)(uintptr_t)ARG(4));
+    if ((int32_t)r < 0 && r != 0x8876086au) LOG(LOG_D3D, "IDirect3D9::EnumAdapterModes -> %08x", r);
+    return r;
+}
+
+HOSTFN(sp_IDirect3D9_GetAdapterDisplayMode, 3)
+{
+    if (deterministic) {
+        if (ARG(1) != 0 || !ARG(2))
+            return D3DERR_INVALIDCALL;
+        D3DDISPLAYMODE m = {1920, 1080, 60, D3DFMT_X8R8G8B8};
+        memcpy((void *)(uintptr_t)ARG(2), &m, sizeof m);
+        return D3D_OK;
+    }
+    void *self = d3d_host(ARG(0));
+    uint32_t r = (uint32_t)((HRESULT (*)(void *, UINT, D3DDISPLAYMODE *))VT(self)[8])(self, (UINT)ARG(1),
+        (D3DDISPLAYMODE *)(uintptr_t)ARG(2));
+    if ((int32_t)r < 0 && r != 0x8876086au) LOG(LOG_D3D, "IDirect3D9::GetAdapterDisplayMode -> %08x", r);
+    return r;
+}
+
 HOSTFN(sp_IDirect3D9_GetAdapterMonitor, 2) { return 0x00120001u; }
 HOSTFN(sp_IDirect3D9_RegisterSoftwareDevice, 2) { return 0x8876086cu; }
 
