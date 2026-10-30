@@ -251,7 +251,10 @@ static void blit_layout(void)
     int ngroups = 0;
     for (int k = 0; k < ni; k++) {
         BlitItem *it = &items[k];
-        if (it->op == 2 && k > 0 && items[k - 1].op == 2 && items[k - 1].group >= 0) {
+        /* (a line of text: position commands, or in play sprites with their own x: each glyph anchored
+           alone tore a line crossing the anchors' limits apart, "Press ACTION      (X) to press") */
+        if ((it->op == 2 || it->op == 12) && k > 0 && (items[k - 1].op == 2 || items[k - 1].op == 12) &&
+            items[k - 1].group >= 0) {
             BlitItem *pv = &items[k - 1];
             float h = pv->y1 - pv->y0 > 4 ? pv->y1 - pv->y0 : 8;
             if (fabsf(it->y0 - pv->y0) <= 1.5f && it->x0 >= pv->x0 - 1 && it->x0 <= pv->x1 + h * 1.5f) {
