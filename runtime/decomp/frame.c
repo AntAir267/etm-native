@@ -212,47 +212,46 @@ static int timer_advance(CPU *c)
    drive with the throttle held, 2026-10-30: about 3,900 units a second at +14 s at 30 frames, 7,500
    at 60];
    0x71c1d5, the driving levels' traffic and race state (modes 1 and 2).
-   Both held to 30 calls a second of game time, whatever the drawn rate: one call per two updates
-   run, each seeing the measured rate of 30 it was made for (0x712c84 and 0x70f002 count 60 / rate
-   as ticks). At 30 frames a second (two updates a frame) that is exactly the original. */
+   Below two updates a frame they wait for the second (one call per two updates), each seeing the
+   measured rate of 30 they were made for (0x712c84 and 0x70f002 count 60 / rate as ticks). At two
+   updates a frame or more they run once, the original exactly, not twice in a frame to catch up. */
 #define STEP_UPDATES 2
-static int due_steps(int *updates)
+static int step_due(int *updates)
 {
     *updates += (int)R32(UPDATES_THIS_FRAME);
-    int steps = *updates / STEP_UPDATES;
-    *updates -= steps * STEP_UPDATES;
-    return steps;
+    if (*updates < STEP_UPDATES)
+        return 0;
+    *updates = 0;
+    return 1;
 }
 static int drive_step(CPU *c)
 {
     static int updates;
     uint32_t e = c->esp, rate = R32(MEASURED_RATE);
-    WF32(MEASURED_RATE, 30.0f);
-    for (int steps = due_steps(&updates); steps > 0; steps--) {
+    if (step_due(&updates)) {
+        WF32(MEASURED_RATE, 30.0f);
         W32(c->esp -= 4, DC_RET);
         F_0071c1d5_orig(c);
         if (c->ret != DC_RET)
             fatal("drive_step: returned to %08x", c->ret);
-        c->esp = e;
+        W32(MEASURED_RATE, rate);
     }
-    W32(MEASURED_RATE, rate);
     return decomp_ret(c, e, c->eax, 0);
 }
 static int physics_step(CPU *c)
 {
     static int updates;
     uint32_t e = c->esp, world = c->ecx, time = R32(e + 4), rate = R32(MEASURED_RATE);
-    WF32(MEASURED_RATE, 30.0f);
-    for (int steps = due_steps(&updates); steps > 0; steps--) {
+    if (step_due(&updates)) {
+        WF32(MEASURED_RATE, 30.0f);
         W32(c->esp -= 4, time);
         W32(c->esp -= 4, DC_RET);
         c->ecx = world;
         F_00728aa0_orig(c);
         if (c->ret != DC_RET)
             fatal("physics_step: returned to %08x", c->ret);
-        c->esp = e;
+        W32(MEASURED_RATE, rate);
     }
-    W32(MEASURED_RATE, rate);
     return decomp_ret(c, e, c->eax, 1);
 }
 
