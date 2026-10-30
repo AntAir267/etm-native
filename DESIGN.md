@@ -537,4 +537,15 @@ backtrace when a matching file opens) on the level files]:
   GetAdapterDisplayMode answer a fixed list (640x480 .. 2560x1600 at 60 Hz) and a 1920x1080
   desktop (d3d9.c, d3d9gen.py SPECIAL); normal play asks the renderer as before. tests/ab.sh
   --fresh: same.
+- 2026-10-29, the level loader's other two findings looked into: (1) Niobe's exterior start (1.0,
+  B1_PO_01_N_EXTERIOR_START) going black after a long walk is the level, not the port: the same
+  with the drawing rewrites off (ETM_DECOMP_OFF=all, frames identical); the camera keeps going at
+  walking speed from z 4752 to past -17000 with nothing stopping it, while in the lobby (1.10) the
+  same walk stops at a wall (x 2833) [verified: ETM_PEEK of the camera position, work/niobe]. The
+  file is the New Game cut scene's set (17.19 / 17.20); the story never gives the player control
+  there, and that side of it has no walls. (2) The freeway on foot (11.x, cut scenes 17.29 / 17.30)
+  is cut from this data: its sounds and effects (sound/ and effects/Beat_4_Freeway/*FF_01*) and a
+  city map (driving/aa_freeway_on_foot.cty) are present, the level files (Levels/B4_FF_01_*) are
+  not; Level Select lists only load points whose file exists. The Xbox disc might hold it [guess:
+  unchecked].
 
