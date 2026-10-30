@@ -522,7 +522,9 @@ HOSTFN(sp_IDirect3DDevice9_GetCreationParameters, 2)
 }
 
 /* ETM_SHOT="frame,frame,...": the back buffer of those presented frames saved as
-   shot_<frame>.png in the user folder (checking the picture without capturing the desktop) */
+   shot_<frame>.png in the user folder (checking the picture without capturing the desktop);
+   "+frame" counts from the scripted input's mark (input.h: the level loader sets it) */
+long input_script_mark_frame(void);
 #include <zlib.h>
 static void png_chunk(FILE *f, const char *type, const uint8_t *d, uint32_t n)
 {
@@ -539,17 +541,21 @@ static void shot_maybe(void *dev)
 {
     static int parsed;
     static unsigned long want[1024];
+    static char rel[1024];
     static int nwant;
     if (!parsed) {
         parsed = 1;
         const char *e = getenv("ETM_SHOT");
         for (const char *p = e; p && *p && nwant < 1024; ) {
-            want[nwant++] = strtoul(p, (char **)&p, 10);
+            rel[nwant] = *p == '+';
+            want[nwant++] = strtoul(p + (*p == '+'), (char **)&p, 10);
             while (*p == ',' || *p == ' ') p++;
         }
     }
     int hit = 0;
-    for (int i = 0; i < nwant; i++) hit |= want[i] == frame_count + 1;
+    long mark = input_script_mark_frame();
+    for (int i = 0; i < nwant; i++)
+        hit |= rel[i] ? mark >= 0 && want[i] + (unsigned long)mark == frame_count + 1 : want[i] == frame_count + 1;
     if (!hit) return;
     void *bb = NULL, *sys = NULL;
     if (((HRESULT (*)(void *, UINT, UINT, D3DBACKBUFFER_TYPE, void **))VT(dev)[18])(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb) < 0)

@@ -2707,6 +2707,8 @@ static int nscript;
    so a test steers at the same point of a drive however long loading took */
 static long script_mark = -1;
 
+long input_script_mark_frame(void) { return script_mark; }   /* (-1 before the mark) */
+
 void input_script_mark(unsigned long frame)
 {
     if (script_mark < 0) {

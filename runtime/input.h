@@ -127,5 +127,6 @@ void ifc_exit(void);                    /* at exit: motors off */
    frame numbers for 3 frames (or `hold` frames). */
 void input_frame(unsigned long frame);
 void input_script_mark(unsigned long frame);   /* "+frames:KEY" scripted keys count from here */
+long input_script_mark_frame(void);            /* the mark (-1 before it): ETM_PAD and ETM_SHOT "+frames" too */
 /* Optional: also told about every scripted press/release (e.g. to post WM_KEYDOWN/WM_KEYUP). */
 extern void (*input_script_key_hook)(int dik, int down);

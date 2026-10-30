@@ -56,6 +56,12 @@ HOOKS = {
     0x66c752: 'controls_setup',
     0x66e9bf: 'controls_update',
     0x66eab0: 'controls_draw',
+    # the title menu (front-end page 2, runtime/levels.c, DESIGN.md decision 12): its list built
+    # (Load, New Game, Options, Hacking, Quit), where levels.c adds the game's own "Level Select"
+    # text, and its page run each frame, where levels.c runs the level select and starts a level
+    # the way the Load page does
+    0x65dec8: 'title_build',
+    0x65e161: 'title_update',
 }
 
 # the drawing code's functions, each hookable for its rewrite (runtime/decomp/, decomp.h DECOMP)

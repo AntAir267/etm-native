@@ -380,6 +380,15 @@ static int movie_fmv, movies_fill = -1;
 
 static void movie_opened(const char *win)
 {
+    static const char *bt_pat = (const char *)1;
+    if (bt_pat == (const char *)1)
+        bt_pat = getenv("ETM_OPEN_BT");
+    if (bt_pat && strcasestr(win, bt_pat)) {   /* (debug: who opens it, F_<address> frames) */
+        extern void log_backtrace(const char *why);
+        char why[600];
+        snprintf(why, sizeof why, "open \"%s\" at frame %lu", win, frame_count);
+        log_backtrace(why);
+    }
     size_t n = strlen(win);
     if (n < 4 || strcasecmp(win + n - 4, ".avi"))
         return;
@@ -391,10 +400,20 @@ static void movie_opened(const char *win)
 }
 
 /* (d3d9.c asks for each screen-space draw: 1 with a scale and offset for x and y, 0 to draw as is) */
+static unsigned long movie_drawn;      /* the last frame the movie player drew a picture */
+
+/* a story film (movies\fmv\) on screen now (levels.c: test runs skip them) */
+int game_film_playing(void)
+{
+    return movie_fmv && movie_drawn && movie_drawn + 2 >= frame_count;
+}
+
 int ui2d_layout(uint32_t caller, float minx, float maxx, float miny, float maxy, float *scale, float *offset,
                 float *yscale, float *yoffset)
 {
     (void)minx; (void)maxx; (void)miny; (void)maxy;
+    if (caller >= 0x7be3fb && caller < 0x7beb44)
+        movie_drawn = frame_count;
     /* the movie picture (0x7be3fb draws it with x times [0x97eda0]): pillarboxed, or across the
        screen (the films) */
     if (caller >= 0x7be3fb && caller < 0x7beb44 && ui_active()) {
@@ -482,6 +501,8 @@ void game_init(void)
     resolution_choose();
     extern void menu_install(void);
     menu_install();                     /* the port's settings in the game's Options pages (menu.c) */
+    extern void levels_install(void);
+    levels_install();                   /* the level loader: --level, Level Select (levels.c) */
     hook_settings_load = hook_settings_load_fn;
     hook_blit_draw = hook_blit_draw_fn;
     hook_projection = hook_projection_fn;
@@ -505,4 +526,6 @@ void game_frame(unsigned long frame)
     }
     extern void mss_frame(void);
     mss_frame();
+    extern void levels_frame(unsigned long frame);
+    levels_frame(frame);
 }

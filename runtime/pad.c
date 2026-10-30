@@ -418,7 +418,7 @@ int pad_count(void)
 /* ------------------------------------------------------------------ ETM_PAD */
 /* axis: 0 a button, 1 an axis, 2 plugging (index 0 unplug, 1 the controller, 2 another one);
    p2: player 2's controller ("P2." before the name; connected at its first event) */
-typedef struct { unsigned long at, release; int axis, index, value, hold, state, p2; } PadPress;
+typedef struct { unsigned long at, release; int axis, index, value, hold, state, p2, relative; } PadPress;
 static PadPress *script;
 static int nscript, script_slot = -1, script_slot2 = -1;
 static const char *const plug_names[3] = {"UNPLUG", "PLUG", "PLUG2"};
@@ -445,7 +445,8 @@ void pad_init(void)
     char *copy = strdup(env), *save = NULL;
     for (char *tok = strtok_r(copy, ", \t\n", &save); tok; tok = strtok_r(NULL, ", \t\n", &save)) {
         char *colon = strchr(tok, ':'), *end;
-        unsigned long at = colon ? strtoul(tok, &end, 10) : 0;
+        int relative = tok[0] == '+';           /* "+frames:": from the scripted input's mark (input.h) */
+        unsigned long at = colon ? strtoul(tok + relative, &end, 10) : 0;
         if (!colon || end != colon) {
             LOG(LOG_ALWAYS, "ETM_PAD: \"%s\" is not frame:BUTTON or frame:AXIS=value", tok);
             continue;
@@ -460,7 +461,7 @@ void pad_init(void)
             *star = 0;
             hold = atoi(star + 1) > 0 ? atoi(star + 1) : 1;
         }
-        PadPress p = {at, 0, 0, -1, 1, hold, 0, p2};
+        PadPress p = {at, 0, 0, -1, 1, hold, 0, p2, relative};
         for (int k = 0; k < 3 && !eq; k++)
             if (!strcasecmp(name, plug_names[k])) {
                 p.axis = 2;
@@ -519,7 +520,8 @@ void pad_frame(unsigned long frame)
     for (int k = 0; k < nscript; k++) {
         PadPress *s = &script[k];
         int down = -1;
-        if (s->state == 0 && frame >= s->at) {
+        long mark = s->relative ? input_script_mark_frame() : 0;
+        if (s->state == 0 && mark >= 0 && frame >= s->at + (unsigned long)mark) {
             s->state = 1;
             s->release = frame + (unsigned long)s->hold;
             down = 1;

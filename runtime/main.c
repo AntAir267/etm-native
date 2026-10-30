@@ -118,6 +118,23 @@ static void dump_state(CPU *c)
     free(sym);
 }
 
+/* (debug) the translated functions on the host stack now, innermost first, in one log line */
+void log_backtrace(const char *why)
+{
+    void *bt[64];
+    int nb = backtrace(bt, 64);
+    char **sym = backtrace_symbols(bt, nb);
+    char line[2048];
+    int n = snprintf(line, sizeof line, "backtrace (%s):", why);
+    for (int i = 0; i < nb && sym && n < (int)sizeof line - 16; i++) {
+        const char *p = strstr(sym[i], "(F_");
+        if (p)
+            n += snprintf(line + n, sizeof line - n, " %.8s", p + 3);
+    }
+    free(sym);
+    logmsg(LOG_ALWAYS, "%s", line);
+}
+
 void fatal(const char *fmt, ...)
 {
     va_list ap;
@@ -867,15 +884,19 @@ static void usage(void)
             "usage: etm [--game DIR] [--user DIR] [--log LIST] [--window|--fullscreen] [--frames N] [--seconds S]\n"
             "              [--test] [--hash FILE] [--hash-every N] [--dump-memory FRAME FILE]\n"
             "              [--option KEY=VALUE]   (see options.txt in the user folder)\n"
+            "              [--level NAME [--character ghost|niobe] [--difficulty easy|normal|hard]] [--list-levels]\n"
             "  --test  deterministic run: virtual clock, timers at frame ends, no real-time sound\n"
-            "  --log  comma list: api,file,d3d,ddraw,sound,input,win,mem,thread,reg,draw,all\n");
+            "  --log  comma list: api,file,d3d,ddraw,sound,input,win,mem,thread,reg,draw,all\n"
+            "  --level  straight into a load point of the game's level table (B1_DC_01_N_CITY_SECTION_A, NAME@LEVEL\n"
+            "           or LEVEL.POINT; plays in a window unless --test); --list-levels prints the table\n");
     exit(1);
 }
 
 int main(int argc, char **argv)
 {
     const char *cli_opts[16];
-    int ncli = 0;
+    int ncli = 0, level_play = 0;
+    extern void levels_cli(const char *level, const char *character, const char *difficulty, int list);
     clock_gettime(CLOCK_MONOTONIC, &t_start);
 #ifdef _WIN32
     const char *home = getenv("APPDATA");           /* %APPDATA%\etm-native, '/' separated */
@@ -908,6 +929,10 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--fullscreen")) { extern int start_fullscreen; headless = 0; start_fullscreen = 1; }
         else if (!strcmp(a, "--test")) deterministic = 1;
         else if (!strcmp(a, "--option") && v) { cli_opts[ncli++ & 15] = v; i++; }
+        else if (!strcmp(a, "--level") && v) { levels_cli(v, NULL, NULL, 0); level_play = 1; i++; }
+        else if (!strcmp(a, "--character") && v) { levels_cli(NULL, v, NULL, 0); i++; }
+        else if (!strcmp(a, "--difficulty") && v) { levels_cli(NULL, NULL, v, 0); i++; }
+        else if (!strcmp(a, "--list-levels")) levels_cli(NULL, NULL, NULL, 1);
         else if (!strcmp(a, "--hash") && v) {
             hashfp = fopen(v, "w");
             draw_hashing = 1;
@@ -950,6 +975,14 @@ int main(int argc, char **argv)
             i++;
         } else
             usage();
+    }
+    /* --level without --test plays, as the applications-menu entry does */
+    if (level_play && !deterministic && headless && !hidden_window) {
+        headless = 0;
+        if (!logpath) {
+            snprintf(default_log, sizeof default_log, "%s/last-run.log", user_dir);
+            logpath = default_log;
+        }
     }
     mkdir(user_dir, 0755);
     if (logpath) {

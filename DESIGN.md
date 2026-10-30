@@ -381,6 +381,99 @@ Round 1 (2026-10-29; VULKAN.md is the renderer's own handoff): done as planned, 
   [verified: no "antialiasing" lines in the logs]. Left for the drawing side (not this round).
 - Options > Video got its thirteenth row, Renderer (DXVK / Vulkan, on restart); the rows are 25 apart.
 
+### 12. The level loader (Ant, 2026-10-29: "a debugger that loads you into those levels")
+Testing (the Vulkan renderer's image checks, the rewrite's A/B, interpolation) only reached the front
+end, the first scenes and the Post Office lobby: the test route starts a new game, and driving, the
+hovercraft and the later levels need saves nobody has. runtime/levels.c starts any load point of the
+game's own level table the way the game's Load page starts a saved game. Its header comment has the
+details; the essentials [verified: disassembly of the functions named, the table read at run time,
+the New Game route watched with ETM_WATCH on the world's level field and ETM_OPEN_BT (game.c: a
+backtrace when a matching file opens) on the level files]:
+- The table: built at start-up by 0x5d1138 in the world object ([[0x97f230]+0x4ec] = [0x97f720]):
+  [+0x194] 18 "levels" (the game's word, "Illegal level number %d"), each {count, "load points"} at
+  [+0x1a0], a load point 0x30 bytes (type, file "levels\X.3d2" opened as Levels\X.3d2_42, beat name,
+  animation set, id). Names: 0x986678 + level x 0x170, {UTF-16 level name, count, {UTF-16 load point
+  name, load point, character} x 30}, the texts of Text\TXeStc.bin ("THE POST OFFICE", "Closing
+  Time"). Kinds from the type: 0 on foot, 1 driving, 2 driving as the gunner, 4 hovercraft pilot,
+  5 hovercraft gunner, 7 multiplayer arena (the types' meaning [guess: from names, animation sets and
+  the frames below, which agree]); level 17 is the in-engine cut scenes (New Game starts 17.19 Niobe /
+  17.20 Ghost), 0 the multiplayer arenas and test rooms, 16 "SECRET" (Sparks' training construct, AI
+  test rooms). 220 load points, of which 22 have no file on disk (test rooms, the freeway on foot 11.x,
+  AITutorial2).
+- How a level starts: the in-game handler (0x5392ad -> 0x539311, the world's state +0x190) loads the
+  load point world [+0x20] / [+0x24] when world [+4] (updates since it began) is 0 (0x5d6c14 -> entry
+  0x74864b -> file 0x741330), in one frame. Only 0x65f335, a front-end method, sets a real level:
+  world [+0x20] / [+0x24] from the front end's [+0xc80] / [+0xc84], character [0x97ff10] from [+0xc88],
+  screen [0x97ed80] = 2. The front end [0x98d08c] runs page [+0x20] in state [+0x24]: 1 logos, 6/7
+  language, 2 title menu (0x65e161), 3 opening film, 4 character select and jack-in (0x65f40e), 8
+  options, 10 load (0x65f09d). New Game and Load both end on page 4 state 2 (the jack-in film), then
+  0x65f335. Load's way in: [+0xc80..+0xc88] from the save, [0x98c92c] = 0, [+0xc8c] = 1, 0x65d14c
+  (films let go), the jack-in film into slot 0xd / 0xc, page 4, state 2.
+- The loader does exactly Load's steps with the level, load point and character it is given and no
+  save applied (so a new game's inventory and progress), difficulty [0x97f804] Normal (1, New Game's
+  default; 0 Easy, 2 Hard) unless asked, from the title menu once it is up (state 1 with its backdrop
+  film): the jack-in plays and the game loads the load point itself.
+- The developers' level select is cut: 0x6784c3 ("uidebug", reads Levels\LevelList.txt) has no caller
+  and its per-frame state only prints "Unsupported"; nothing to re-enable. The front end's text table
+  still has "Level Select" (TX<language>FE.bin id 2), which our menu row uses.
+- Command line: --level NAME (file name, NAME@LEVEL where files repeat, or LEVEL.POINT), --character
+  ghost|niobe, --difficulty easy|normal|hard; without --test it plays in a window as the menu entry
+  does. --list-levels prints the table (kind, character, file, name, "(no file)"). Tests: ETM_LEVEL,
+  ETM_LEVEL_CHAR, ETM_LEVEL_DIFFICULTY; the language page is answered with Enter; when the load point
+  runs the scripted input's mark is set, so ETM_KEYS, ETM_PAD (new: "+frames") and ETM_SHOT (new:
+  "+frames") count from the level's start; a status line every 100 frames (level, screen, cinema bars,
+  film, camera); ETM_LEVEL_FRAMES=N ends the run N frames in; ETM_LEVEL_SKIP=1 skips a film (Escape) or
+  in-engine scene (Enter) at the start. Deterministic under --test like the route.
+- Title menu: a sixth row, Level Select (option level_select = on by default; off is the original
+  menu). It fills the menu's own list with the levels, then a level's load points ("Closing Time -
+  Ghost"; the file's name where the records have none), seven rows at a time with "..." where more
+  follow, the game's sounds; Escape goes back; accepting a load point starts it [verified: frames of
+  the title menu, the level list, CITY DRIVING's two load points, and the drive it started].
+- Checks: tests/levels.sh (the sweep: each level loaded, 1500 frames played, frames at +1, +300, +700,
+  +1500, one input by kind, a second run without it to show the input changed something; the table in
+  work/levels/table.txt; tools/levels_sheet.sh makes one picture of each level's four frames).
+  Inputs: on foot the left stick forward, driving / pilot A, gunner the left stick across (it aims; the
+  right stick does nothing there), cut scene Escape; both runs skip a film or in-engine scene at the
+  start (ETM_LEVEL_SKIP). First sweep (2026-10-29, Win Max, DXVK, 640x480): all 11 loaded and played
+  1500 frames without a crash, the input changed the game in all 11:
+    1.0 B1_PO_01_N_EXTERIOR_START  on foot, Niobe: the exterior, then walks into the black (below)
+    1.10 B1_PO_02_G_LOBBY          on foot, Ghost: the lobby, tutorial tip, walks into a corridor
+    7.0 B3_MC_01_G_..._CENTRAL     on foot, Ghost: beat 3's film and scene skipped, the chateau's hall
+    12.9 B5_PP_02_N_EXT_LOWER_SHAVEN on foot, Niobe: the power plant's corridor, distance marker counts
+    2.0 B1_DC_01_N_CITY_SECTION_A  driving, Niobe at the wheel: the city at night, drives under a bridge
+    2.1 B1_DC_01_G_CITY_SECTION_A  driving, Ghost with a rifle out of the window, Niobe driving
+    5.0 B2_DA_01_G_MAIN_AQUEDUCT   driving, Ghost: the aqueduct; "YOU LOST THE PLANE" by +700 (no steering)
+    15.0 B7_HC_01_N_..._TUNNEL_A   hovercraft, Niobe: the Logos' cockpit in the tunnels
+    17.28 B2_AP_00_N_LOBBY_CIN     cut scene: film, then Ghost and Niobe in the car; Escape: save prompt
+    17.20 B1_PO_01_G_EXTERIOR_START cut scene (New Game's): the white construct; Escape: save prompt
+    15.3 B7_HC_01_G_..._TUNNEL_F   hovercraft gunner, Ghost: sentinels; GAME OVER by +1500 (no firing)
+  Deterministic: the city drive by ETM_LEVEL and by --level, hashes every 50 frames to +1000, identical.
+  tests/ab.sh: same (the route never touches the loader). With option level_select = off the route's
+  691 memory and draw hashes equal those of the main checkout's own binary run the same day: the hooks
+  change nothing else (the Level Select row itself, on by default, adds a list item to the title menu,
+  so the route's memory differs from then on, the same with rewrites on and off).
+- Found on the way (not fixed):
+  - The main checkout's saved translation run (work/ab/hash_a.txt, 11:20 on 2026-10-29) no longer
+    reproduces: the same binary run later gives a different memory hash and six fewer API calls from
+    frame 10 on, while that day's later runs agree with each other. Something outside the code moves
+    the test run [guess: DXVK's GPU memory budget (4.22 GiB then, 5.7 GiB later in the logs) if the
+    game asks GetAvailableTextureMem, which DXVK answers from it; our renderer answers a constant].
+    tests/ab.sh reuses a saved run whose id matches, so a stale one reports "differ" at frame 10 with
+    nothing wrong; --fresh runs it again.
+  - In-engine cut scenes skip with Escape, not Enter [verified: 17.20 under the loader, six Enters from
+    +600 changed nothing, Escape at +600 brought "Would you like to save your progress?" at +700; left
+    alone it runs +1700..+1800, as in the route (2283 to ~4005)]. So pad.c's "A presses Enter in cut
+    scenes, which skips them" (2026-10-27, item 3) skips nothing (the pad's Start is Escape and does),
+    and the test route's 3200 RETURN is not what ends the intro scene.
+  - The freeway on foot (11.0 / 11.1, B4_FF_01_*) and its two cut scenes (17.29 / 17.30) are in the
+    table but have no files in the repack, and level 11 has no names record: cut from the game.
+  - 1.0 (B1_PO_01_N_EXTERIOR_START, Niobe's exterior; New Game goes from the cut scene 17.19 /
+    17.20 to the lobby, so the story may never play 1.0 / 1.9 [guess]): walking straight ahead ~4300
+    units from the start leaves Niobe alone on a black screen, the world no longer drawn [guess:
+    outside the area meant to be walked; to look at].
+  - Load points started without a save have what the level gives (Ghost's P229 in the lobby, Niobe's
+    pistol with 12 / 0 in the power plant); no inventory or story flags from earlier levels.
+
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/etm12.py; first translator run; Miles
   stand-in, ReadFileEx; first runs: the intro movies (Atari, Warner Bros., Shiny) play through
@@ -430,3 +523,8 @@ Round 1 (2026-10-29; VULKAN.md is the renderer's own handoff): done as planned, 
   Video page row Renderer. The test route draws only fixed function (no shaders); every image-check frame
   identical to DXVK's on the Win Max at 640x480 and 1280x720, within the limits on the T7; validation
   silent; tests/ab.sh same under both renderers, their hash files identical to each other.
+- 2026-10-29: the level loader (decision 12, runtime/levels.c): --level / ETM_LEVEL / --list-levels and
+  the title menu's Level Select start any of the table's 220 load points (198 with files) the way the
+  Load page does; tests/levels.sh sweep: 11 levels (on foot both characters, the city drive both ways,
+  the aqueduct, the Logos pilot and gunner, two cut scenes) loaded, 1500 frames each, no crash, input
+  works in all; tests/ab.sh same.
