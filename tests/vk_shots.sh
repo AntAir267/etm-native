@@ -45,7 +45,7 @@ run() {    # run <dir> <size> <renderer> <frames> <keys> <shots>
     mv "$u"/shot_*.png "$1"/ 2>/dev/null
 }
 # the Renderer row's value box on the Video page (menu.c: values at x 330 of the 640 x 448 design, the
-# thirteenth row at y 64 + 12 x 25; the design is laid out in a centred 4:3 area of the screen's
+# fourteenth row at y 64 + 13 x 25; the design is laid out in a centred 4:3 area of the screen's
 # height): painted black in both pictures
 mask() {    # mask <dir> <size> <frame>
     local w=${2%x*} h=${2#*x} f=$1/shot_$3.png
@@ -54,8 +54,8 @@ mask() {    # mask <dir> <size> <frame>
     s=$(awk -v h="$h" 'BEGIN { print h / 448 }')
     x0=$(awk -v w="$w" -v h="$h" -v s="$s" 'BEGIN { printf "%d", (w - 640 * h / 480) / 2 + 320 * h / 480 }')
     x1=$(awk -v w="$w" -v h="$h" 'BEGIN { printf "%d", (w - 640 * h / 480) / 2 + 520 * h / 480 }')
-    y0=$(awk -v s="$s" 'BEGIN { printf "%d", 358 * s }')
-    y1=$(awk -v s="$s" 'BEGIN { printf "%d", 392 * s }')
+    y0=$(awk -v s="$s" 'BEGIN { printf "%d", 383 * s }')
+    y1=$(awk -v s="$s" 'BEGIN { printf "%d", 417 * s }')
     cp "$f" "$1/raw_$3.png"
     convert "$1/raw_$3.png" -fill black -draw "rectangle $x0,$y0 $x1,$y1" "$f"
 }

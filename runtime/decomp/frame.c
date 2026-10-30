@@ -224,6 +224,26 @@ static int step_due(int *updates)
     *updates = 0;
     return 1;
 }
+/* OPTION draw_distance (driving, modes 1 and 2): what the city fades to black within (each section's fog,
+   5000 to 20000 in the city drive) and the far plane (0x71c1d5 sets it each call, 40000 here: [view +0x34],
+   which the frustum, the projection and the portal walk follow) both times the scale. The fog is scaled
+   where it reaches the device (d3d9.c SetRenderState), so the program keeps its own values. */
+static float draw_scale = -1;
+void draw_distance_option(void) { draw_scale = -1; }
+float draw_distance_scale(void)
+{
+    if (draw_scale < 0) {
+        draw_scale = (float)atof(option_str("draw_distance", "1"));
+        if (draw_scale < 1 || draw_scale > 4)
+            draw_scale = 1;
+    }
+    if (draw_scale == 1 || !R32(GAME))
+        return 1;
+    extern int game_front_end(void);
+    uint32_t mode = R32(R32(GAME) + 0xf8);
+    return (mode == 1 || mode == 2) && !game_front_end() ? draw_scale : 1;
+}
+
 static int drive_step(CPU *c)
 {
     static int updates;
@@ -235,6 +255,7 @@ static int drive_step(CPU *c)
         if (c->ret != DC_RET)
             fatal("drive_step: returned to %08x", c->ret);
         W32(MEASURED_RATE, rate);
+        WF32(VIEW + 0x34, RF32(VIEW + 0x34) * draw_distance_scale());
     }
     return decomp_ret(c, e, c->eax, 0);
 }
@@ -273,8 +294,21 @@ int frame_thirty_level(void)
     return R32(GAME) && !game_front_end() && unblended_level();
 }
 
+/* 0x5daa9c (actor, ?, id, ...): a sound played by its id (Sound\\soundDB.h: sfx<id>). What a character says
+   is logged in every run, so a repeat Ant hears can be named from last-run.log: the ids from 0xe00 (the
+   voice streams D*, by the table); everything else this function plays comes from 0x41xxxx (the car) and
+   0x5exxxx (weapons, bodies). */
+static int voice_log(CPU *c)
+{
+    uint32_t id = R32(c->esp + 12), from = R32(c->esp);
+    if (id >= 0xe00 && (from >> 20) != 4 && (from >> 20) != 0x5e)
+        LOG(LOG_ALWAYS, "voice: sfx%u from %08x, frame %lu", id, from, frame_count);
+    return 0;
+}
+
 void frame_install(void)
 {
+    hook_voice_log = voice_log;
     hook_drive_step = drive_step;
     hook_physics_step = physics_step;
     hook_timer_elapsed = timer_elapsed;

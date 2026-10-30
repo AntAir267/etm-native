@@ -783,12 +783,37 @@ HOSTFN(sp_IDirect3DDevice9_SetVertexShaderConstantF, 4)
         self, ARG(1), (const float *)gptr(ARG(2)), ARG(3));
 }
 
+static pthread_mutex_t device_lock;
+static pthread_once_t device_lock_once = PTHREAD_ONCE_INIT;
+static void device_lock_init(void)
+{
+    pthread_mutexattr_t a;
+    pthread_mutexattr_init(&a);
+    pthread_mutexattr_settype(&a, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&device_lock, &a);
+}
+void d3d_lock(void)
+{
+    pthread_once(&device_lock_once, device_lock_init);
+    pthread_mutex_lock(&device_lock);
+}
+void d3d_unlock(void) { pthread_mutex_unlock(&device_lock); }
+
 HOSTFN(sp_IDirect3DDevice9_SetRenderState, 3)
 {
     void *self = d3d_host(ARG(0));
     uint32_t state = ARG(1), value = ARG(2);
     if (state == D3DRS_MULTISAMPLEANTIALIAS)
         value = msaa_render_state(state, value);
+    if (state == D3DRS_FOGSTART || state == D3DRS_FOGEND) {     /* (option draw_distance: decomp/frame.c) */
+        extern float draw_distance_scale(void);
+        float f, scale = draw_distance_scale();
+        if (scale != 1.0f) {
+            memcpy(&f, &value, 4);
+            f *= scale;
+            memcpy(&value, &f, 4);
+        }
+    }
     return (uint32_t)((HRESULT (*)(void *, D3DRENDERSTATETYPE, DWORD))VT(self)[57])(self, (D3DRENDERSTATETYPE)state, value);
 }
 

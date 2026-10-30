@@ -142,6 +142,7 @@ typedef struct {
 } Setting;
 
 static void apply_display(void) { if (!deterministic) win_options(); }
+extern void draw_distance_option(void);
 static void apply_frame_rate(void) { frame_rate_reapply(); frame_limit_options(); }
 static void apply_layout(void) { game_options_reapply(); }
 
@@ -162,6 +163,8 @@ static const Setting video_rows[] = {
     {"Movies", "movies", {"fill", "fit"}, {"Fill", "Fit"}, 0, apply_layout},
     {"Cut Scenes", "cutscenes", {"fill", "bars"}, {"Fill", "Bars"}, 0, apply_layout},
     {"Menus", "ui", {"center", "stretch"}, {"Center", "Stretch"}, 0, apply_layout},
+    {"Driving Draw Distance", "draw_distance", {"1", "1.5", "2", "3"}, {"Original", "1.5x", "2x", "3x"}, 0,
+     draw_distance_option},
     {"Renderer", "renderer", {"dxvk", "vulkan"}, {"DXVK", "Vulkan"}, 1, NULL},
 };
 #define NVIDEO ((int)(sizeof video_rows / sizeof video_rows[0]))
@@ -228,7 +231,10 @@ static void canonical(const Setting *s, const char *v, char *out, size_t n)
         snprintf(out, n, "%s", v && !strcasecmp(v, "stretch") ? "stretch" : "center");
     else if (!strcmp(k, "renderer"))            /* d3d9.c Direct3DCreate9: vulkan, else DXVK */
         snprintf(out, n, "%s", v && !strcasecmp(v, "vulkan") ? "vulkan" : "dxvk");
-    else if (!strcmp(k, "button_prompts"))      /* prompts.c: keyboard, controller, else auto */
+    else if (!strcmp(k, "draw_distance")) {     /* decomp/frame.c: 1.5, 2 or 3, else the original */
+        double d = v ? atof(v) : 1;
+        snprintf(out, n, "%s", d == 1.5 ? "1.5" : d == 2 ? "2" : d == 3 ? "3" : "1");
+    } else if (!strcmp(k, "button_prompts"))      /* prompts.c: keyboard, controller, else auto */
         snprintf(out, n, "%s", v && !strcasecmp(v, "keyboard") ? "keyboard" : v && !strcasecmp(v, "controller") ? "controller" : "auto");
     else
         snprintf(out, n, "%s", v ? v : "");

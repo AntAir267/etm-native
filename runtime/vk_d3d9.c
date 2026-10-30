@@ -1541,37 +1541,18 @@ static VkPipeline make_pipeline(const PipeKey *k, const D3DVERTEXELEMENT9 *el, i
 
 /* the pipeline for k: made (by this thread, unless a worker is making it: then waited for), or as
    it was; worker: only made if nobody has asked for it yet */
-static VkPipeline pipeline(const PipeKey *k, const D3DVERTEXELEMENT9 *el, int nel, int worker)
+/* A pipeline first needed in play is made by a thread of its own and its draws are left out until it is
+   there, for a few frames at most: made on the game thread it stops the game for its 70 to 90 ms, a hitch
+   each time new materials come into view (Ant's log, 2026-10-30). In test runs and the front end the
+   game thread makes it and waits, as before: the frames are compared, and a menu mustn't flicker. */
+extern int deterministic;
+extern int game_front_end(void);
+#define NASYNC 2
+static int async_q[256], async_head, async_tail, async_started;
+static pthread_cond_t async_more = PTHREAD_COND_INITIALIZER;
+
+static void pipe_finish(PipeEnt *e, VkPipeline pipe, double dt, int worker)
 {
-    uint64_t h = 0xcbf29ce484222325ull;
-    const uint8_t *p = (const uint8_t *)k;
-    for (size_t i = 0; i < sizeof *k; i++) h = (h ^ p[i]) * 0x100000001b3ull;
-    uint32_t i = (uint32_t)h & (PCAP - 1);
-    pthread_mutex_lock(&pipe_lock);
-    for (int n = 0; n < PCAP; n++, i = (i + 1) & (PCAP - 1)) {
-        if (!pipes[i].state) break;
-        if (!memcmp(&pipes[i].k, k, sizeof *k)) {
-            while (!worker && pipes[i].state == 1) pthread_cond_wait(&pipe_made, &pipe_lock);
-            VkPipeline r = pipes[i].p;
-            pthread_mutex_unlock(&pipe_lock);
-            return r;
-        }
-    }
-    if (pipes[i].state || npipes >= PCAP * 3 / 4) {
-        pthread_mutex_unlock(&pipe_lock);
-        return VK_NULL_HANDLE;
-    }
-    PipeEnt *e = &pipes[i];
-    e->k = *k;
-    e->state = 1;
-    e->nel = nel;
-    e->el = malloc(sizeof *el * (size_t)(nel + 1));
-    memcpy(e->el, el, sizeof *el * (size_t)nel);
-    pipe_order[npipes++] = (int)i;
-    pthread_mutex_unlock(&pipe_lock);
-    double t0 = real_ms();
-    VkPipeline pipe = make_pipeline(k, el, nel);
-    double t1 = real_ms(), dt = t1 - t0;
     pthread_mutex_lock(&pipe_lock);
     e->p = pipe;
     e->state = 2;
@@ -1587,6 +1568,70 @@ static VkPipeline pipeline(const PipeKey *k, const D3DVERTEXELEMENT9 *el, int ne
     if (!worker && (once_("first pipeline") || (n % 32) == 0 || dt >= 4.0 || getenv("ETM_VK_LOG_PIPES")))
         LOG(LOG_ALWAYS, "vulkan renderer: frame %lu, %d pipelines (this one %.2f ms; on the game thread %d, %.1f ms in all, "
             "the longest %.2f; by the workers %d, %.1f ms)", frame_count, n, dt, ng, mg, worst, nw, mw);
+}
+
+static void *async_worker(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&pipe_lock);
+        while (async_head == async_tail)
+            pthread_cond_wait(&async_more, &pipe_lock);
+        PipeEnt *e = &pipes[async_q[async_head++ % 256]];
+        pthread_mutex_unlock(&pipe_lock);
+        double t0 = real_ms();
+        VkPipeline pipe = make_pipeline(&e->k, e->el, e->nel);
+        pipe_finish(e, pipe, real_ms() - t0, 1);
+    }
+    return NULL;
+}
+
+static VkPipeline pipeline(const PipeKey *k, const D3DVERTEXELEMENT9 *el, int nel, int worker)
+{
+    uint64_t h = 0xcbf29ce484222325ull;
+    const uint8_t *p = (const uint8_t *)k;
+    for (size_t i = 0; i < sizeof *k; i++) h = (h ^ p[i]) * 0x100000001b3ull;
+    uint32_t i = (uint32_t)h & (PCAP - 1);
+    int later = !worker && !deterministic && !game_front_end();
+    pthread_mutex_lock(&pipe_lock);
+    for (int n = 0; n < PCAP; n++, i = (i + 1) & (PCAP - 1)) {
+        if (!pipes[i].state) break;
+        if (!memcmp(&pipes[i].k, k, sizeof *k)) {
+            while (!worker && !later && pipes[i].state == 1) pthread_cond_wait(&pipe_made, &pipe_lock);
+            VkPipeline r = pipes[i].state == 2 ? pipes[i].p : VK_NULL_HANDLE;
+            pthread_mutex_unlock(&pipe_lock);
+            return r;
+        }
+    }
+    if (later && async_tail - async_head >= 256)
+        later = 0;                              /* (the queue full: this one now) */
+    if (pipes[i].state || npipes >= PCAP * 3 / 4) {
+        pthread_mutex_unlock(&pipe_lock);
+        return VK_NULL_HANDLE;
+    }
+    PipeEnt *e = &pipes[i];
+    e->k = *k;
+    e->state = 1;
+    e->nel = nel;
+    e->el = malloc(sizeof *el * (size_t)(nel + 1));
+    memcpy(e->el, el, sizeof *el * (size_t)nel);
+    pipe_order[npipes++] = (int)i;
+    if (later) {
+        async_q[async_tail++ % 256] = (int)i;
+        pthread_cond_signal(&async_more);
+        int start = !async_started;
+        async_started = 1;
+        pthread_mutex_unlock(&pipe_lock);
+        for (int t = 0; start && t < NASYNC; t++) {
+            pthread_t th;
+            if (pthread_create(&th, NULL, async_worker, NULL) == 0) pthread_detach(th);
+        }
+        return VK_NULL_HANDLE;
+    }
+    pthread_mutex_unlock(&pipe_lock);
+    double t0 = real_ms();
+    VkPipeline pipe = make_pipeline(k, el, nel);
+    pipe_finish(e, pipe, real_ms() - t0, worker);
     return pipe;
 }
 
@@ -3215,7 +3260,7 @@ static HRESULT dev_Present(void *This, const RECT *sr, const RECT *dr, HWND w, c
 static void check_thread(void)
 {
     if (__builtin_expect(pthread_self() != creator_thread, 0) && once_("thread"))
-        LOG(LOG_ALWAYS, "vulkan renderer: a device call from another thread (%lx; the device's %lx) [not safe yet]",
+        LOG(LOG_ALWAYS, "vulkan renderer: device calls from a second thread too (%lx; the device's %lx; one at a time: d3d_lock)",
             (unsigned long)pthread_self(), creator_thread);
 }
 

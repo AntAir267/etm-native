@@ -53,6 +53,7 @@ HOOKS = {
     # the driving simulation's step, one a drawn frame in the original (frame.c: held to 30 a second)
     0x71c1d5: 'drive_step',
     0x728aa0: 'physics_step',
+    0x5daa9c: 'voice_log',
     0x61dac0: 'list_selected',
     # the logos page's update (its state 5, the legal notices, takes no input: levels.c skips it)
     0x65ca66: 'logos_update',

@@ -142,6 +142,7 @@ static const char *const help[][2] = {
     {"resolution", "resolution: desktop (the default: the screen's size), original (MatrixConfig.ini's RESOLUTION, "
                    "0-6 = 640x480 .. 2048x1536) or WxH"},
     {"anisotropic", "anisotropic: 16, 8, 4, 2 or off (texture filtering)"},
+    {"draw_distance", "draw_distance: how far you see in the driving levels, the fog and the far plane scaled: 1 (the default: the original), 1.5, 2 or 3"},
     {"renderer", "renderer: dxvk (the default) or vulkan (our own Vulkan renderer, VULKAN.md; DXVK if it cannot start); "
                  "read at the start"},
     {"hud", "hud: corners (the default: on wide screens the HUD sits at the screen's edges, as far from them as on a 4:3 "

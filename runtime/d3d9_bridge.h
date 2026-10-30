@@ -8,6 +8,23 @@
 
 #define VT(o) (*(void ***)(o))
 
+/* One program thread at a time in the device: the game draws its loading frames from a second thread
+   while its main thread makes the level's textures and buffers [verified: frame logs], and our
+   renderer records both into one command buffer (a crash in the driver at a level's start, 2026-10-30).
+   Every Direct3D call from the program comes through the macros below. */
+void d3d_lock(void);
+void d3d_unlock(void);
+#undef HOSTFN
+#define HOSTFN(fname, nargs) \
+    static uint32_t fname##_body(CPU *c); \
+    void fname(CPU *c) { d3d_lock(); uint32_t _r = fname##_body(c); d3d_unlock(); api_return(c, _r, nargs); } \
+    static uint32_t fname##_body(CPU *c)
+#undef METHOD
+#define METHOD(fname, nargs) \
+    static uint32_t fname##_body(CPU *c); \
+    static void fname(CPU *c) { d3d_lock(); uint32_t _r = fname##_body(c); d3d_unlock(); api_return(c, _r, nargs); } \
+    static uint32_t fname##_body(CPU *c)
+
 void *d3d_host(uint32_t guest);              /* the DXVK object behind a program object */
 void *d3d_host_or_null(uint32_t guest);
 uint32_t d3d_wrap(int kind, void *host);     /* the program object for a DXVK object (one each) */
