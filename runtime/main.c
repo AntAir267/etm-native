@@ -612,7 +612,7 @@ void api_trace(CPU *c)
    shows is as fresh as it can be). "screen" is 3 under the screen's refresh: with variable refresh
    (G-Sync, FreeSync) frames then stay inside the range the screen follows, never waiting for vsync.
    The wait sleeps to half a millisecond before and spins the rest (Windows' timers are not that
-   exact). */
+   exact). Driving and hovercraft always run at 30 (decomp/frame.c frame_thirty_level). */
 static double limit_ms;
 static int limit_read;
 
@@ -659,7 +659,9 @@ static void frame_limit(void)
             }
         }
     }
-    if (limit_ms <= 0) {
+    extern int frame_thirty_level(void);
+    double wait_ms = frame_thirty_level() ? 1000.0 / 30 : limit_ms;
+    if (wait_ms <= 0) {
         if (ft_on) ft_after = real_ms();
         return;
     }
@@ -672,7 +674,7 @@ static void frame_limit(void)
         while ((now = real_ms()) < next)
             __builtin_ia32_pause();
     }
-    next = (next > now - limit_ms ? next : now) + limit_ms;    /* (a frame late: from now) */
+    next = (next > now - wait_ms ? next : now) + wait_ms;    /* (a frame late: from now) */
     if (ft_on) ft_after = real_ms();
 }
 

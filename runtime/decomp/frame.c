@@ -204,23 +204,31 @@ static int timer_advance(CPU *c)
     game_callm(c, 0x677ae0u, c->ecx, 0);
     return decomp_ret(c, e, c->eax, 1);
 }
-/* THE DRIVING SIMULATION (0x71c1d5: the cars, in the driving levels, game mode [GAME+0xf8] 1 or 2) is
-   called once a drawn frame, on the frame's first update, and moves everything a fixed step: tuned
-   for 30 frames a second. At 60 the cars go twice as fast [verified: tests in real time, the city
-   drive with the throttle held, 2026-10-30: at 30 frames about 3,900 units a second at +14 s, at 60
-   about 7,500, more and more above; the repack's cap of 30 was hiding it]. Held to 30 steps a
-   second of game time, whatever the drawn rate: one step per two updates run, each step seeing the
-   measured rate of 30 it was made for (0x712c84 and 0x70f002 count 60 / rate as its ticks). At 30
-   frames a second (two updates a frame) that is exactly the original. */
-#define DRIVE_UPDATES_PER_STEP 2
-static int drive_updates;
+/* THE FIXED-STEP SIMULATIONS are called once a drawn frame, on the frame's first update, and each
+   call moves things a fixed step made for 30 calls a second:
+   0x728aa0, the level's physics world (level +0x1cc): it overwrites the time it is given with
+   1 / [0x93d210], 1/30 of a second [verified: its code; 0x7a2284 sets 30], and is what moves the
+   cars [verified: holding only 0x71c1d5 left the speed unchanged, tests in real time, the city
+   drive with the throttle held, 2026-10-30: about 3,900 units a second at +14 s at 30 frames, 7,500
+   at 60];
+   0x71c1d5, the driving levels' traffic and race state (modes 1 and 2).
+   Both held to 30 calls a second of game time, whatever the drawn rate: one call per two updates
+   run, each seeing the measured rate of 30 it was made for (0x712c84 and 0x70f002 count 60 / rate
+   as ticks). At 30 frames a second (two updates a frame) that is exactly the original. */
+#define STEP_UPDATES 2
+static int due_steps(int *updates)
+{
+    *updates += (int)R32(UPDATES_THIS_FRAME);
+    int steps = *updates / STEP_UPDATES;
+    *updates -= steps * STEP_UPDATES;
+    return steps;
+}
 static int drive_step(CPU *c)
 {
+    static int updates;
     uint32_t e = c->esp, rate = R32(MEASURED_RATE);
-    drive_updates += (int)R32(UPDATES_THIS_FRAME);
     WF32(MEASURED_RATE, 30.0f);
-    while (drive_updates >= DRIVE_UPDATES_PER_STEP) {
-        drive_updates -= DRIVE_UPDATES_PER_STEP;
+    for (int steps = due_steps(&updates); steps > 0; steps--) {
         W32(c->esp -= 4, DC_RET);
         F_0071c1d5_orig(c);
         if (c->ret != DC_RET)
@@ -230,19 +238,46 @@ static int drive_step(CPU *c)
     W32(MEASURED_RATE, rate);
     return decomp_ret(c, e, c->eax, 0);
 }
+static int physics_step(CPU *c)
+{
+    static int updates;
+    uint32_t e = c->esp, world = c->ecx, time = R32(e + 4), rate = R32(MEASURED_RATE);
+    WF32(MEASURED_RATE, 30.0f);
+    for (int steps = due_steps(&updates); steps > 0; steps--) {
+        W32(c->esp -= 4, time);
+        W32(c->esp -= 4, DC_RET);
+        c->ecx = world;
+        F_00728aa0_orig(c);
+        if (c->ret != DC_RET)
+            fatal("physics_step: returned to %08x", c->ret);
+        c->esp = e;
+    }
+    W32(MEASURED_RATE, rate);
+    return decomp_ret(c, e, c->eax, 1);
+}
 
-/* the levels whose movement isn't blended yet (the cars are objects, frame_blend moves only the
-   camera and the characters: at driving speeds the camera left the car behind): these keep the
-   game's own pacing under frame_rate = uncapped */
+/* DRIVING AND HOVERCRAFT DRAW AT 30 A SECOND (modes 1, 2, 4, 5; main.c frame_limit), as the repack's
+   cap had them, whatever frame_rate and frame_limit say. The steps above alone keep the speed, but
+   at 60 the camera follows on every update while the car moves on every second one, and a "pressed"
+   lasting one update can fall between steps [verified: the driving view's switch lost at 60, kept
+   at 30, tests in real time 2026-10-30]. Blending between updates isn't for these either: the fast
+   turning bones (wheels, a driver's hands on the wheel) blended element by element between two poses
+   warp and stretch [verified: frames, 2026-10-30, the hand; gone unblended]. */
 static int unblended_level(void)
 {
     uint32_t mode = R32(R32(GAME) + 0xf8);
     return mode == 1 || mode == 2 || mode == 4 || mode == 5;
 }
+int frame_thirty_level(void)
+{
+    extern int game_front_end(void);
+    return R32(GAME) && !game_front_end() && unblended_level();
+}
 
 void frame_install(void)
 {
     hook_drive_step = drive_step;
+    hook_physics_step = physics_step;
     hook_timer_elapsed = timer_elapsed;
     hook_timer_advance = timer_advance;
     hook_input_poll = input_poll;

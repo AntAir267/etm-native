@@ -14,7 +14,7 @@ ls gen/code_*.c gen/table.c gen/stubs.c | xargs -P 12 -I{} sh -c 'f={}; o='$O'/$
 [ $O/d3d9_gen.o -nt gen/d3d9_gen.c ] || gcc $CF -Ithird_party/dxvk-native/include/dxvk -c gen/d3d9_gen.c -o $O/d3d9_gen.o
 gcc -O1 -g -c tools/calltree.c -o $O/calltree.o
 gcc -o work/calltree/etm $(for f in runtime/*.c; do echo build/obj/rt_$(basename $f .c).o; done) \
-    $(for f in runtime/decomp/*.c; do [ -e "$f" ] && echo build/obj/dc_$(basename $f .c).o; done) build/obj/rt_shaders_gen.o $O/*.o \
+    $(for f in runtime/decomp/*.c; do [ -e "$f" ] && echo build/obj/dc_$(basename $f .c).o; done) build/obj/rt_shaders_gen.o build/obj/rt_spirv_gen.o $O/*.o \
     -rdynamic -Lthird_party/sdl3/lib -Wl,-rpath,"$PWD/build/lib" -lSDL3 -pthread -lm -ldl -lz
 ln -sfn ../../build/lib work/calltree/lib
 user=work/testuser
