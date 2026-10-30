@@ -48,6 +48,13 @@ HOOKS = {
     0x7b5333: 'input_poll',
     # the SSE-support test (setjmp into 0xe80780 around a movaps): its saved stack position cleared
     0x8bbd20: 'sf_8bbd20',
+    # the row a list has selected (the title menu's own dispatch reads it: levels.c puts Level Select
+    # second and maps the rows below it back)
+    # the driving simulation's step, one a drawn frame in the original (frame.c: held to 30 a second)
+    0x71c1d5: 'drive_step',
+    0x61dac0: 'list_selected',
+    # the logos page's update (its state 5, the legal notices, takes no input: levels.c skips it)
+    0x65ca66: 'logos_update',
     # the front end's Options screen (runtime/menu.c, DESIGN.md "In-game options"): the Video page
     # built (its label and value lists) and run each frame, where menu.c adds the port's settings
     # as rows; the Controls page built, run and drawn, where it adds Vibration

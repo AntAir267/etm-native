@@ -13,7 +13,7 @@
 #include "options.h"
 #include "win.h"
 
-#define VK_DEF_FN(n) PFN_vk##n vk##n;
+#define VK_DEF_FN(n) __attribute__((visibility("hidden"))) PFN_vk##n vk##n;
 VK_GLOBAL_FNS(VK_DEF_FN)
 VK_INSTANCE_FNS(VK_DEF_FN)
 VK_DEVICE_FNS(VK_DEF_FN)

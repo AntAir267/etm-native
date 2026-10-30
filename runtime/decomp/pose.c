@@ -343,28 +343,56 @@ static int dc_6d7210(CPU *c)
 {
     uint32_t e = c->esp, out = ARG(0), src = ARG(1), prev = ARG(2), bone = ARG(4), skel = ARG(5);
     int32_t fmt = (int32_t)ARG(3);
+    /* the original's frame, its locals in their places: later code reads what these calls leave on
+       the stack (the city drive: a record's float was -0.25 after the original, -209 after a
+       rewrite with its locals elsewhere [verified: tests of 2026-10-30, memory at frame 1250]) */
+    uint32_t fp = e - 4, ebp = c->ebp;
+#define LOC(off, v) W32(fp - (off), (uint32_t)(v))
+#define LOCF(off, v) WF32(fp - (off), (v))
+#define KEY_RET(n) do { c->ebp = ebp; return decomp_ret(c, e, (n), 0); } while (0)
+    W32(fp, ebp);
+    c->ebp = fp;
+    c->esp = fp - 0x9c;
     if ((int32_t)bone >= (int32_t)R32(skel + SKEL_BONES))
         fmt >>= 4;
     else if ((int8_t)R8(skel + SKEL_BONE(bone) + BONE_LOD) > 0x28)
         fmt >>= 2;
+    LOC(0x84, fmt & 0xc);
     if ((fmt & 0xc) == 0xc) {
         uint32_t v = R32(src), slot = v & 3;
-        float a = (float)game_call_st0(c, DEC10, 1, (uint32_t)((int32_t)v >> 2) & 0x3ffu);
-        float b = (float)game_call_st0(c, DEC10, 1, (uint32_t)((int32_t)v >> 12) & 0x3ffu);
-        float d = (float)game_call_st0(c, DEC10, 1, (uint32_t)((int32_t)v >> 22) & 0x3ffu);
+        uint32_t i0 = (uint32_t)((int32_t)v >> 2) & 0x3ffu, i1 = (uint32_t)((int32_t)v >> 12) & 0x3ffu,
+                 i2 = (uint32_t)((int32_t)v >> 22) & 0x3ffu;
+        LOC(0x18, v); LOC(0x1c, slot); LOC(4, i0); LOC(8, i1); LOC(0x10, i2);
+        float a = (float)game_call_st0(c, DEC10, 1, i0);
+        LOCF(0x20, a);
+        float b = (float)game_call_st0(c, DEC10, 1, i1);
+        LOCF(0x24, b);
+        float d = (float)game_call_st0(c, DEC10, 1, i2);
+        LOCF(0xc, d);
         float w = quat_rest(c, a, b, d);
+        LOCF(0x14, w);
+        LOC(0x88, slot);
         quat_place(out, slot, a, b, d, w);
-        return decomp_ret(c, e, 4, 0);
+        KEY_RET(4);
     }
     if ((fmt & 0xc) == 8 || (fmt & 0xc) == 0) {
-        uint32_t dec = (fmt & 0xc) == 8 ? DEC16_A : DEC16_B;
+        /* (the two formats' locals: format 8's, format 0's) */
+        int f8 = (fmt & 0xc) == 8;
+        uint32_t dec = f8 ? DEC16_A : DEC16_B;
         uint32_t s0 = R16(src), s1 = R16(src + 2), s2 = R16(src + 4);
         uint32_t neg = s2 & 0x8000u, slot = ((s0 & 0x8000u) >> 14) + ((s1 & 0x8000u) >> 15);
+        LOC(f8 ? 0x28 : 0x4c, s0); LOC(f8 ? 0x34 : 0x58, s1); LOC(f8 ? 0x3c : 0x60, s2);
+        LOC(f8 ? 0x30 : 0x54, neg); LOC(f8 ? 0x40 : 0x64, slot);
+        uint32_t la = f8 ? 0x44 : 0x68, lb = f8 ? 0x48 : 0x6c, ld = f8 ? 0x2c : 0x50, lw = f8 ? 0x38 : 0x5c;
         float a, b, d;
         if (prev) {
             a = (float)game_call_st0(c, dec, 1, s0);
+            LOCF(la, a);
             b = (float)game_call_st0(c, dec, 1, s1);
+            LOCF(lb, b);
             d = (float)game_call_st0(c, dec, 1, s2);
+            LOCF(ld, d);
+            LOC(f8 ? 0x8c : 0x94, slot);
             uint32_t o[3];    /* prev's three components other than the slot */
             for (uint32_t k = 0, n = 0; k < 4; k++)
                 if (k != slot)
@@ -374,14 +402,19 @@ static int dc_6d7210(CPU *c)
             d = (float)(V(d) + LX(prev + o[2]));
         } else {
             a = (float)(game_call_st0(c, dec, 1, s0) * LX(F_HALF));
+            LOCF(la, a);
             b = (float)(game_call_st0(c, dec, 1, s1) * LX(F_HALF));
+            LOCF(lb, b);
             d = (float)(game_call_st0(c, dec, 1, s2) * LX(F_HALF));
         }
+        LOCF(la, a); LOCF(lb, b); LOCF(ld, d);
         float w = quat_rest(c, a, b, d);
         if (neg)
             w = (float)-V(w);
+        LOCF(lw, w);
+        LOC(f8 ? 0x90 : 0x98, slot);
         quat_place(out, slot, a, b, d, w);
-        return decomp_ret(c, e, 6, 0);
+        KEY_RET(6);
     }
     /* 4: raw floats */
     float a = RF32(src), b = RF32(src + 4), d = RF32(src + 8);
@@ -400,9 +433,15 @@ static int dc_6d7210(CPU *c)
         b = (float)(V(b) + LX(F_TWO));
         bits |= 2;
     }
+    LOCF(0x70, a); LOCF(0x74, b); LOCF(0x78, d); LOC(0x80, bits);
     float w = quat_rest(c, a, b, d);
+    LOCF(0x7c, w);
+    LOC(0x9c, bits);
     quat_place(out, 3 - bits, a, b, d, w);    /* bits 0: w last; 1: third; 2: second; 3: first */
-    return decomp_ret(c, e, 12, 0);
+    KEY_RET(12);
+#undef LOC
+#undef LOCF
+#undef KEY_RET
 }
 DECOMP(6d7210, dc_6d7210);
 

@@ -49,7 +49,10 @@
     X(CmdClearColorImage) X(CmdClearDepthStencilImage) X(CmdCopyBuffer) X(CreateSwapchainKHR) \
     X(DestroySwapchainKHR) X(GetSwapchainImagesKHR) X(AcquireNextImageKHR) X(QueuePresentKHR) \
     X(CreateQueryPool) X(DestroyQueryPool) X(ResetQueryPool) X(GetQueryPoolResults) X(CmdWriteTimestamp2)
-#define VK_DECL_FN(n) extern PFN_vk##n vk##n;
+/* hidden: the program links with -rdynamic, and an exported variable named like a Vulkan function
+   interposes on libvulkan's own (libvulkan 1.4.350 on the Steam Deck bound to these and jumped into
+   data; found by the Deck chat on L.A. Rush, the same here: segfault at start) */
+#define VK_DECL_FN(n) extern __attribute__((visibility("hidden"))) PFN_vk##n vk##n;
 VK_GLOBAL_FNS(VK_DECL_FN)
 VK_INSTANCE_FNS(VK_DECL_FN)
 VK_DEVICE_FNS(VK_DECL_FN)

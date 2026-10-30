@@ -204,8 +204,45 @@ static int timer_advance(CPU *c)
     game_callm(c, 0x677ae0u, c->ecx, 0);
     return decomp_ret(c, e, c->eax, 1);
 }
+/* THE DRIVING SIMULATION (0x71c1d5: the cars, in the driving levels, game mode [GAME+0xf8] 1 or 2) is
+   called once a drawn frame, on the frame's first update, and moves everything a fixed step: tuned
+   for 30 frames a second. At 60 the cars go twice as fast [verified: tests in real time, the city
+   drive with the throttle held, 2026-10-30: at 30 frames about 3,900 units a second at +14 s, at 60
+   about 7,500, more and more above; the repack's cap of 30 was hiding it]. Held to 30 steps a
+   second of game time, whatever the drawn rate: one step per two updates run, each step seeing the
+   measured rate of 30 it was made for (0x712c84 and 0x70f002 count 60 / rate as its ticks). At 30
+   frames a second (two updates a frame) that is exactly the original. */
+#define DRIVE_UPDATES_PER_STEP 2
+static int drive_updates;
+static int drive_step(CPU *c)
+{
+    uint32_t e = c->esp, rate = R32(MEASURED_RATE);
+    drive_updates += (int)R32(UPDATES_THIS_FRAME);
+    WF32(MEASURED_RATE, 30.0f);
+    while (drive_updates >= DRIVE_UPDATES_PER_STEP) {
+        drive_updates -= DRIVE_UPDATES_PER_STEP;
+        W32(c->esp -= 4, DC_RET);
+        F_0071c1d5_orig(c);
+        if (c->ret != DC_RET)
+            fatal("drive_step: returned to %08x", c->ret);
+        c->esp = e;
+    }
+    W32(MEASURED_RATE, rate);
+    return decomp_ret(c, e, c->eax, 0);
+}
+
+/* the levels whose movement isn't blended yet (the cars are objects, frame_blend moves only the
+   camera and the characters: at driving speeds the camera left the car behind): these keep the
+   game's own pacing under frame_rate = uncapped */
+static int unblended_level(void)
+{
+    uint32_t mode = R32(R32(GAME) + 0xf8);
+    return mode == 1 || mode == 2 || mode == 4 || mode == 5;
+}
+
 void frame_install(void)
 {
+    hook_drive_step = drive_step;
     hook_timer_elapsed = timer_elapsed;
     hook_timer_advance = timer_advance;
     hook_input_poll = input_poll;
@@ -218,7 +255,7 @@ void frame_install(void)
 static int dc_6469f1(CPU *c)
 {
     uint32_t e = c->esp, fp = e - 4, out = ARG(1), ebp = c->ebp;
-    if (frame_rate_uncapped())
+    if (frame_rate_uncapped() && !unblended_level())
         return decomp_ret(c, e, free_count(c, out), 0);
     W32(fp, ebp);
     c->ebp = fp;

@@ -48,7 +48,7 @@
    answered with Enter on the way), the menu entry is part of it.
 
    The title menu's Level Select (option level_select, on by default; off gives the original menu):
-   a sixth row of the game's own list; accepting it fills the same list with the levels (their names
+   the second row of the game's own list, under Load; accepting it fills the same list with the levels (their names
    from the records; the cut scenes, the freeway on foot and the test rooms, which have none, ours),
    then a level's load points ("Closing Time - Ghost", the file's name where the records have none),
    seven rows at a time ("..." where more follow), up / down / accept / back as the game's menus
@@ -399,6 +399,13 @@ static void start(CPU *c, uint32_t fe, int k, int ghost, int difficulty)
 }
 
 /* ------------------------------------------------------------------ the title menu's Level Select */
+#define TITLE_ROWS       6              /* with Level Select */
+#define TITLE_ROW_LEVELS 1              /* its row */
+#define TITLE_DISPATCH   0x65e421u      /* the title menu's read of the accepted row (0x65e41c's return) */
+#define LOGOS_NEXT       0x65ce7fu      /* the logos page's next step (what the end of each calls) */
+#define LOGOS_LEGAL      5u             /* its state showing the legal notices: fades in, 5 s, fades out,
+                                           no input read, unlike the logos [verified: 0x65ca66 disassembly] */
+#define LOGOS_FADE(f)    ((f) + 0x9a0)  /* the fade: down to -100 when that state ends */
 #define LS_ROWS     7                   /* rows shown, in the title menu's place under the logo: the */
 #define LS_Y        272                 /* menu's own list (y 280, 24 apart) moved up a little and */
 #define LS_SPACING  22                  /* closer, so seven fit the 448-line design (TITLE_BUILD puts it back) */
@@ -464,7 +471,7 @@ static void ls_close(CPU *c, uint32_t fe)
 {
     ls.active = 0;
     game_callm(c, TITLE_BUILD, fe, 0);  /* (the build hook adds Level Select again) */
-    game_callm(c, LIST_SELECT, FE_LIST(fe), 1, 5);
+    game_callm(c, LIST_SELECT, FE_LIST(fe), 1, TITLE_ROW_LEVELS);
 }
 
 static void ls_update(CPU *c, uint32_t fe)
@@ -509,13 +516,22 @@ static void ls_update(CPU *c, uint32_t fe)
 }
 
 /* ------------------------------------------------------------------ hooks */
+static int ls_accepted;                 /* Level Select accepted some way only the list sees */
+
 static int hook_title_build_fn(CPU *c)
 {
     uint32_t fe = c->ecx;
     F_0065dec8_orig(c);
     uint32_t ret = c->ret, eax = c->eax;
-    if (option_bool("level_select", 1) && table_ready() && R32(L_COUNT(FE_LIST(fe))) == 5)  /* (5: not the demo mode's one) */
-        list_add(c, FE_LIST(fe), game_callm(c, TEXT_GET, FE_TEXT(fe), 2, TEXT_LEVEL_SELECT, 0));
+    /* (on in play, off by default under --test: the scripted routes count the original menu's rows) */
+    if (option_bool("level_select", !deterministic) && table_ready() && R32(L_COUNT(FE_LIST(fe))) == 5) { /* (5: not the demo mode's one) */
+        /* the same texts in the same order (0x65dec8: Load, New Game, Options, Hacking, Quit), with
+           Level Select under Load; hook_list_selected_fn gives the game its own row numbers back */
+        static const uint32_t rows[TITLE_ROWS] = {3, TEXT_LEVEL_SELECT, 4, 5, 0x24, 0x6c};
+        game_callm(c, LIST_CLEAR, FE_LIST(fe), 0);
+        for (int r = 0; r < TITLE_ROWS; r++)
+            list_add(c, FE_LIST(fe), game_callm(c, TEXT_GET, FE_TEXT(fe), 2, rows[r], 0));
+    }
     c->ret = ret;
     c->eax = eax;
     return 1;
@@ -543,7 +559,9 @@ static int hook_title_update_fn(CPU *c)
         return decomp_ret(c, entry, c->eax, 0);
     }
     uint32_t eax = c->eax, edx = c->edx;
-    if (R32(L_COUNT(FE_LIST(fe))) == 6 && R32(L_SEL(FE_LIST(fe))) == 5 && menu_key(c, fe, 4)) {
+    if (R32(L_COUNT(FE_LIST(fe))) == TITLE_ROWS &&
+        (ls_accepted || (R32(L_SEL(FE_LIST(fe))) == TITLE_ROW_LEVELS && menu_key(c, fe, 4)))) {
+        ls_accepted = 0;
         sound(c, SOUND_MOVE);
         ls_open(c, fe, 0, 0, 0);
         return decomp_ret(c, entry, c->eax, 0);
@@ -554,10 +572,45 @@ static int hook_title_update_fn(CPU *c)
     return 0;
 }
 
+/* 0x61dac0: a list's selected row. For the title menu's dispatch, with Level Select in the list:
+   the rows below it as the game numbers them; Level Select itself past the game's five, where the
+   dispatch does nothing (accepted some way hook_title_update_fn's test did not see: opened next frame) */
+static int hook_list_selected_fn(CPU *c)
+{
+    uint32_t e = c->esp;
+    if (R32(e) != TITLE_DISPATCH || R32(L_COUNT(c->ecx)) != TITLE_ROWS)
+        return 0;
+    uint32_t row = R32(L_SEL(c->ecx));
+    if (row == TITLE_ROW_LEVELS) {
+        ls_accepted = 1;
+        return decomp_ret(c, e, TITLE_ROWS, 0);
+    }
+    return decomp_ret(c, e, row > TITLE_ROW_LEVELS ? row - 1 : row, 0);
+}
+
+/* 0x65ca66: the logos page. The legal notices can be skipped with accept, the logos' skip or back. */
+static int hook_logos_update_fn(CPU *c)
+{
+    uint32_t e = c->esp, fe = c->ecx, eax = c->eax, edx = c->edx;
+    if (R32(FE_STATE(fe)) != LOGOS_LEGAL)
+        return 0;
+    if (menu_key(c, fe, 4) || menu_key(c, fe, 6) || menu_key(c, fe, 7)) {
+        W32(LOGOS_FADE(fe), (uint32_t)-100);
+        game_callm(c, LOGOS_NEXT, fe, 0);
+        return decomp_ret(c, e, c->eax, 0);
+    }
+    c->eax = eax;
+    c->ecx = fe;
+    c->edx = edx;
+    return 0;
+}
+
 void levels_install(void)
 {
     hook_title_build = hook_title_build_fn;
     hook_title_update = hook_title_update_fn;
+    hook_list_selected = hook_list_selected_fn;
+    hook_logos_update = hook_logos_update_fn;
     const char *name = cli_level ? cli_level : getenv("ETM_LEVEL");
     const char *ch = cli_char ? cli_char : getenv("ETM_LEVEL_CHAR");
     const char *df = cli_diff ? cli_diff : getenv("ETM_LEVEL_DIFFICULTY");

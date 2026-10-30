@@ -118,7 +118,13 @@ static int dc_5fef62(CPU *c)
     static const uint8_t rot[9] = {0x40, 0x44, 0x48, 0x50, 0x54, 0x58, 0x60, 0x64, 0x68};
     for (int k = 0; k < 9; k++) {
         uint32_t p = R32(ARROW) + rot[k];
-        WF32(p, (float)((f80)u2f(0x3d75c28fu) * (f80)RF32(p)));    /* x 0.06 */
+        /* x 0.06, on the x87 as the translation keeps this function (the barrier stops GCC narrowing
+           it to SSE, which rounds to nearest; the game's x87 rounds down [verified: tools/fpround.py,
+           the city drive's A/B]) */
+        f80 m = (f80)u2f(0x3d75c28fu), q = (f80)RF32(p);
+        __asm__("" : "+t"(m));
+        __asm__("" : "+t"(q));
+        WF32(p, (float)(m * q));
     }
     for (uint32_t k = 0; k < 12; k += 4)
         W32(R32(ARROW) + 0x70 + k, R32(R32(ARROW) + AO_POSITION + k));
