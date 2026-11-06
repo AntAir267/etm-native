@@ -1,0 +1,16 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "Enter the Matrix",
+  "system": "PC (Windows)",
+  "type": "recomp",
+  "original": { "revision": "2004 edition, version 1.2", "sha1": "c73191cea2e399282fdce3fbec12905dcb4f45a6" },
+  "project": "Enter the Matrix: Recompiled",
+  "status": "in-progress",
+  "targets": ["Linux"],
+  "toolchain": "own translator",
+  "approach": "Static recompilation of Matrix.exe and its DivX movie libraries to C, with a Windows, Direct3D 9, DirectInput and Miles stand-in runtime on SDL3; drawn by DXVK or the project's own Vulkan renderer; hand-written rewrites checked against the translation",
+  "started": "2026-10-26",
+  "maintainers": [{ "name": "AntAir267", "link": "https://github.com/AntAir267" }],
+  "help": ["Playing it and reporting bugs", "Testing the driving and hovercraft levels", "Testing on other graphics cards"],
+  "notes": "Generally untested: played through the first levels only, not start to finish; the driving and hovercraft levels are untested apart from short scripted runs. Bring your own copy of the 2004 edition; the translation is made on your computer. Adds widescreen, an uncapped frame rate, any controller, button prompts and a level select, all in the game's own Options menu."
+}

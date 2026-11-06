@@ -1,0 +1,11 @@
+name: Idea or enhancement
+description: Something you'd like the port to do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What it should do, and why. New settings go in the game's own Options menu, and the original behaviour must stay reachable.
+    validations:
+      required: true

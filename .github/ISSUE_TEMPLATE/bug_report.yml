@@ -1,0 +1,32 @@
+name: Bug report
+description: Something in the game or the build doesn't work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please don't attach any of the game's files or anything taken from them; logs and your own screenshots are fine.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did and where in the game (level, or the menu), what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Linux distribution, graphics card and driver, controller if any.
+    validations:
+      required: true
+  - type: dropdown
+    id: renderer
+    attributes:
+      label: Renderer (Options > Video)
+      options: [DXVK, Vulkan, Don't know]
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: last-run.log from ~/.local/share/etm-native.
+      render: text

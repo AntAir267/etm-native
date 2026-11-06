@@ -13,3 +13,4 @@ __pycache__/
 devrec_dump.bin
 fncheck_dump_*.bin
 *.orig
+CLAUDE.md
