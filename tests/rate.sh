@@ -66,6 +66,9 @@ else
     wait $pa $pb
 fi
 if [ $auto = 1 ]; then
+    for m in a b; do
+        [ -s "$out/mem_$m.bin" ] || { echo "no memory dump from run $m (see $out/log_$m.txt)"; exit 1; }
+    done
     skips=()
     for r in $DRAW_ONLY; do skips+=(--skip "$r"); done
     d=$(.venv/bin/python tools/memdiff.py "$out/mem_a.bin" "$out/mem_b.bin" --max 1000 "${skips[@]}" | grep -v '^[0-9]* differing\|^011f')
