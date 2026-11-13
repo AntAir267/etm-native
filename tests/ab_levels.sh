@@ -32,7 +32,8 @@ for l in "${levels[@]}"; do
     a=$(tail -1 "$d/off/log.txt"); b=$(tail -1 "$d/on/log.txt")
     first=$(paste -d' ' <(cut -d' ' -f1,3,4 "$d/off/hash.txt") <(cut -d' ' -f3,4 "$d/on/hash.txt") |
             awk '$2!=$4 || $3!=$5 {print $1, ($2!=$4?"memory":""), ($3!=$5?"draws":""); exit}')
-    n=$(wc -l < "$d/on/hash.txt")
+    [ -s "$d/off/hash.txt" ] && [ -s "$d/on/hash.txt" ] || first="no hashes"
+    n=$(cat "$d/on/hash.txt" 2>/dev/null | wc -l)
     grep -q 'FATAL\|Segmentation' "$d/on/log.txt" && first="$first FATAL"
     if [ -z "$first" ] && [ "$a" = "$b" ]; then echo "$l: same ($n hashes, $b)"; else echo "$l: DIFFERS at $first ($n hashes; off $a, on $b)"; rc=1; fi
 done
