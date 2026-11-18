@@ -5,6 +5,7 @@ one jmp) the target it reaches. Uses gen/'s discovery cache when fresh (work/dis
     disfn.py ADDR [ADDR ...]
 """
 import os, pickle, struct, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'third_party', 'antistatic', 'translator'))
 sys.path.insert(0, os.path.dirname(__file__))
 from recomp import load_config
 from image import Image, Module, Decoder

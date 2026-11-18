@@ -11,12 +11,21 @@ CC = gcc
 CXX = g++
 SDL3 ?= third_party/sdl3
 DXVK ?= third_party/dxvk-native
-CFLAGS_COMMON = -std=gnu11 -g -fno-strict-aliasing -frounding-math -fno-omit-frame-pointer -Iruntime -Igen -I$(SDL3)/include
+# AntiStatic, the shared recompilation toolkit (third_party/antistatic, pinned at a release tag):
+# its translator, and its runtime (the Windows stand-in, input, sound, Miles) beside this port's
+# own files (runtime/: the game's code, the Direct3D 9 bridge and renderer, the rewrites)
+ANTISTATIC ?= third_party/antistatic
+AS_RT = $(ANTISTATIC)/runtime
+CFLAGS_COMMON = -std=gnu11 -g -fno-strict-aliasing -frounding-math -fno-omit-frame-pointer -Iruntime -I$(AS_RT)/win32 -I$(AS_RT)/cpu -I$(AS_RT)/d3d9 -Igen -I$(SDL3)/include
 CFLAGS_GEN = $(CFLAGS_COMMON) -O2 -w -DCPU_FAST_MEM
 CFLAGS_RT = $(CFLAGS_COMMON) -O2 -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation
 LDFLAGS = -rdynamic -L$(SDL3)/lib -Wl,-rpath,'$$ORIGIN/lib' -lSDL3 -pthread -lm -ldl -lz
 
 RT_SRC = $(wildcard runtime/*.c) gen/d3d9_gen.c
+AS_SRC = $(wildcard $(AS_RT)/win32/*.c) $(AS_RT)/cpu/fpu.c $(AS_RT)/music/mss32.c $(wildcard $(AS_RT)/d3d9/*.c)
+AS_OBJ = $(patsubst %.c,build/obj/as_%.o,$(notdir $(AS_SRC)))
+AS_H = $(wildcard $(AS_RT)/win32/*.h $(AS_RT)/cpu/*.h $(AS_RT)/d3d9/*.h)
+vpath %.c $(AS_RT)/win32 $(AS_RT)/cpu $(AS_RT)/music $(AS_RT)/d3d9
 DXVK_INC = -I$(DXVK)/include/dxvk
 # the drawing code's rewrites (runtime/decomp/, DESIGN.md)
 DC_SRC = $(wildcard runtime/decomp/*.c)
@@ -30,39 +39,45 @@ GEN_OBJ = $(patsubst gen/%.c,build/obj/gen_%.o,$(GEN_SRC))
 
 all: build/etm build/lib/libSDL3.so.0 build/lib/libdxvk_d3d9.so.0
 
-# (the translator's own scripts: other tools/ changes don't regenerate)
-RECOMP_PY = $(wildcard $(addprefix tools/,recomp.py codegen.py discover.py image.py pe.py fpustack.py simd.py x86.py))
+# (the translator: a new pin regenerates)
+RECOMP_PY = $(wildcard $(ANTISTATIC)/translator/*.py)
 gen/funcs.h: $(RECOMP_PY) $(BUILD_CFG) builds/decomp_funcs.txt
-	$(PY) tools/recomp.py $(GAME) $(BUILD_CFG) gen
+	$(PY) $(ANTISTATIC)/translator/recomp.py $(GAME) $(BUILD_CFG) gen
 gen/table.c gen/stubs.c: gen/funcs.h ;
 gen/files.mk: gen/funcs.h
 	@echo 'GEN_CODE = $(sort $(wildcard gen/code_*.c))' > $@
 
-build/obj/gen_%.o: gen/%.c gen/funcs.h runtime/cpu.h | build/obj
+build/obj/gen_%.o: gen/%.c gen/funcs.h $(AS_RT)/cpu/cpu.h | build/obj
 	$(CC) $(CFLAGS_GEN) -c $< -o $@
 
-build/obj/rt_%.o: runtime/%.c runtime/*.h runtime/decomp/decomp.h gen/funcs.h | build/obj
+build/obj/rt_%.o: runtime/%.c runtime/*.h $(AS_H) runtime/decomp/decomp.h gen/funcs.h | build/obj
+	$(CC) $(CFLAGS_RT) -c $< -o $@
+
+build/obj/as_%.o: %.c runtime/port.h $(AS_H) gen/funcs.h | build/obj
 	$(CC) $(CFLAGS_RT) -c $< -o $@
 
 # (-ffp-contract=off: no fused multiply-adds, so each operation rounds as the original's does)
-build/obj/dc_%.o: runtime/decomp/%.c runtime/decomp/*.h runtime/*.h gen/funcs.h | build/obj
-	$(CC) $(CFLAGS_RT) -ffp-contract=off -c $< -o $@
+build/obj/dc_%.o: runtime/decomp/%.c runtime/decomp/*.h runtime/*.h $(AS_H) gen/funcs.h | build/obj
+	$(CC) $(CFLAGS_RT) -ffp-contract=off -mfpmath=387 -fexcess-precision=standard -c $< -o $@
 
-# the Direct3D 9 bridge: DXVK's headers for the types, wrappers generated from its d3d9.h
-gen/d3d9_gen.c gen/d3d9_gen.h: tools/d3d9gen.py $(DXVK)/include/dxvk/d3d9.h
-	$(PY) tools/d3d9gen.py $(DXVK)/include/dxvk/d3d9.h gen/d3d9_gen.c
-build/obj/rt_d3d9.o: runtime/d3d9.c runtime/*.h gen/d3d9_gen.h gen/funcs.h | build/obj
+# the Direct3D 9 bridge (the toolkit's runtime/d3d9): DXVK's headers for the types, wrappers
+# generated from its d3d9.h
+gen/d3d9_gen.c gen/d3d9_gen.h: $(ANTISTATIC)/tools/d3d9/d3d9gen.py $(DXVK)/include/dxvk/d3d9.h
+	$(PY) $(ANTISTATIC)/tools/d3d9/d3d9gen.py $(DXVK)/include/dxvk/d3d9.h gen/d3d9_gen.c
+build/obj/as_d3d9.o: $(AS_RT)/d3d9/d3d9.c runtime/port.h $(AS_H) gen/d3d9_gen.h gen/funcs.h | build/obj
 	$(CC) $(CFLAGS_RT) $(DXVK_INC) -Wno-unused-function -c $< -o $@
-build/obj/rt_d3d9_%.o: runtime/d3d9_%.c runtime/*.h gen/d3d9_gen.h gen/funcs.h | build/obj
+build/obj/as_d3d9_%.o: $(AS_RT)/d3d9/d3d9_%.c runtime/port.h $(AS_H) gen/d3d9_gen.h gen/funcs.h | build/obj
 	$(CC) $(CFLAGS_RT) $(DXVK_INC) -c $< -o $@
-build/obj/rt_d3d9_gen.o: gen/d3d9_gen.c runtime/*.h gen/d3d9_gen.h | build/obj
+build/obj/rt_d3d9_gen.o: gen/d3d9_gen.c runtime/*.h $(AS_H) gen/d3d9_gen.h | build/obj
 	$(CC) $(CFLAGS_RT) $(DXVK_INC) -Wno-unused-function -c $< -o $@
+build/obj/rt_port_d3d9_etm.o: runtime/port_d3d9_etm.c runtime/*.h $(AS_H) gen/d3d9_gen.h gen/funcs.h | build/obj
+	$(CC) $(CFLAGS_RT) $(DXVK_INC) -c $< -o $@
 
 # replacement shaders (option shaders = improved, runtime/d3d9.c): data/shaders/<hash>.vsh/.psh,
 # shader assembly, assembled into a C table. tools/d3dasm.py runs on every make (a fraction of a
 # second) and rewrites the table only when it changes, so adding or removing a file is noticed too.
 gen/shaders_gen.c: FORCE
-	$(PY) tools/d3dasm.py ctable data/shaders $@
+	$(PY) $(ANTISTATIC)/tools/d3d9/d3dasm.py ctable data/shaders $@
 build/obj/rt_shaders_gen.o: gen/shaders_gen.c | build/obj
 	$(CC) $(CFLAGS_RT) -c $< -o $@
 FORCE:
@@ -86,7 +101,7 @@ gen/spirv_gen.c: FORCE
 build/obj/rt_spirv_gen.o: gen/spirv_gen.c runtime/vk_abi.h | build/obj
 	$(CC) $(CFLAGS_RT) -c $< -o $@
 
-build/etm: $(RT_OBJ) $(GEN_OBJ)
+build/etm: $(RT_OBJ) $(AS_OBJ) $(GEN_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # the shared libraries the program loads, beside it
@@ -112,11 +127,11 @@ install: all
 
 # Function-level check against the original code in Unicorn (tests/fncheck.c)
 UNICORN ?= $(firstword $(wildcard .venv/lib/python3*/site-packages/unicorn))
-build/obj/rt_main_nomain.o: runtime/main.c runtime/*.h gen/funcs.h | build/obj
+build/obj/as_main_nomain.o: $(AS_RT)/win32/main.c runtime/port.h $(AS_H) gen/funcs.h | build/obj
 	$(CC) $(CFLAGS_RT) -DRUNTIME_NO_MAIN -c $< -o $@
 build/obj/gen_x87_special.o: gen/x87_special.c | build/obj
 	$(CC) $(CFLAGS_GEN) -c $< -o $@
-build/fncheck: tests/fncheck.c $(filter-out build/obj/rt_main.o,$(RT_OBJ)) build/obj/rt_main_nomain.o $(GEN_OBJ) build/obj/gen_x87_special.o
+build/fncheck: tests/fncheck.c $(RT_OBJ) $(filter-out build/obj/as_main.o,$(AS_OBJ)) build/obj/as_main_nomain.o $(GEN_OBJ) build/obj/gen_x87_special.o
 	$(CC) $(CFLAGS_RT) -I$(UNICORN)/include -o $@ $^ $(UNICORN)/lib/libunicorn.a $(LDFLAGS) -lrt
 
 build/obj:

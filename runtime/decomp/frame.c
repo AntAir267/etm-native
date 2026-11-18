@@ -14,7 +14,7 @@
 #include <strings.h>
 #include "decomp.h"
 #include "../interp.h"
-#include "../options.h"
+#include "options.h"
 
 /* game state */
 #define STATE_FLAGS      0x97ecccu  /* bits 1, 4, 8, 0x20, 0x40, 0x80 tested here (meanings unknown) */

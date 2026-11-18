@@ -24,6 +24,12 @@ Thanks for helping. Bug reports, testing on other hardware and pull requests are
 5. Enhancements are optional and can be turned off. They come from rendering, not from upscaled
    or replaced game art.
 
+## The toolkit
+
+Translator, Windows runtime and Direct3D 9 bridge fixes belong in the AntiStatic toolkit
+(github.com/AntAir267/AntiStatic-Recomp-Toolkit), which every port pins; this repository holds
+the game's own parts (runtime/: the game's code, port.h and its hooks, the renderer, the rewrites).
+
 ## Pull requests
 
 Keep each one to a single change, and say what it fixes and how you checked it. The maintainer

@@ -47,7 +47,7 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'third_party', 'antistatic', 'tools', 'd3d9'))
 import d3dasm  # noqa: E402
 
 # ------------------------------------------------------------------ the interface (runtime/vk_abi.h)

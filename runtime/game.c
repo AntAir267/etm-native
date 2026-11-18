@@ -1,6 +1,7 @@
 /* What the shared runtime asks of the game-specific side. Enter the Matrix plays its movies
    through the DivX DLLs (translated with it) and has no game-specific controller handling yet. */
 #include <ctype.h>
+#include <execinfo.h>
 #include <math.h>
 #include <string.h>
 #include <strings.h>
@@ -381,7 +382,24 @@ static int hook_blit_draw_fn(CPU *c)
    menus are laid over them in 4:3) are pillarboxed. movies = fit pillarboxes all. */
 static int movie_fmv, movies_fill = -1;
 
-static void movie_opened(const char *win)
+/* (debug) the translated functions on the host stack now, innermost first, in one log line */
+void log_backtrace(const char *why)
+{
+    void *bt[64];
+    int nb = backtrace(bt, 64);
+    char **sym = backtrace_symbols(bt, nb);
+    char line[2048];
+    int n = snprintf(line, sizeof line, "backtrace (%s):", why);
+    for (int i = 0; i < nb && sym && n < (int)sizeof line - 16; i++) {
+        const char *p = strstr(sym[i], "(F_");
+        if (p)
+            n += snprintf(line + n, sizeof line - n, " %.8s", p + 3);
+    }
+    free(sym);
+    LOG(LOG_ALWAYS, "%s", line);
+}
+
+void movie_opened(const char *win)
 {
     static const char *bt_pat = (const char *)1;
     if (bt_pat == (const char *)1)
@@ -511,12 +529,12 @@ void game_init(void)
     hook_settings_load = hook_settings_load_fn;
     hook_blit_draw = hook_blit_draw_fn;
     hook_projection = hook_projection_fn;
-    extern void (*file_open_notify)(const char *winpath);
-    file_open_notify = movie_opened;
 }
 
 void game_frame(unsigned long frame)
 {
+    extern void watch_frame_tick(void);
+    watch_frame_tick();                 /* ETM_WATCH (watch.c) */
     static long dump_at = -2;
     if (dump_at == -2) {
         const char *e = getenv("ETM_DUMP_BINDINGS");

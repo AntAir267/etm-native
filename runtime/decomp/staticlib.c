@@ -10,8 +10,10 @@
 static int dc_8a99b0(CPU *c)
 {
     uint32_t e = c->esp, dst = ARG(0), v = ARG(1) & 0xff, n = ARG(2);
-    if (n)
+    if (n) {
+        W32(e - 4, c->edi);             /* (its push edi: later code reads what is left on the stack) */
         memset(gptr(dst), (int)v, n);
+    }
     c->ecx = n >= 4 ? 0 : dst;
     c->edx = 0;
     return decomp_ret(c, e, dst, 0);

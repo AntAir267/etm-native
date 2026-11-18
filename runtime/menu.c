@@ -95,7 +95,8 @@
 #define JOY_DIR         0x98f048u       /* the joystick's direction as a menu key */
 
 extern int host_fullscreen(void);
-extern void win_options(void), win_rumble_option(void);
+extern void win_options(void), win_rumble_set(int on);
+static void win_rumble_option(void) { win_rumble_set(option_bool("rumble", 1)); }
 extern void frame_rate_reapply(void);
 void game_options_reapply(void);
 

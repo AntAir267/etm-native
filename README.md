@@ -35,15 +35,21 @@ always one setting away.
   (Matrix.exe, without copy protection). The build checks four files by SHA-256 (builds/etm12.py):
   Matrix.exe and the three DivX movie libraries that ship with the game (DivxMediaLib.dll,
   DivxDecoder.dll, FileParser.dll). Other versions are untested and will be refused.
-- Linux on x86-64, a graphics driver with Vulkan 1.3, gcc, GNU make and Python 3 with Capstone.
-- DXVK 3.1.1 built natively with SDL3, and SDL3 itself: third_party/README.md says how.
+- Linux on x86-64, a graphics driver with Vulkan 1.3, gcc, GNU make, meson and ninja, and
+  Python 3 with Capstone.
 
 ## Building
 
-1. Put the game's files in a folder (by default ~/.local/share/etm-native/game).
-2. Set up Python: `python3 -m venv .venv && .venv/bin/pip install capstone`.
-3. Build DXVK and SDL3 into third_party/ as third_party/README.md describes.
-4. `make GAME=/path/to/the/game` translates the program into gen/ (a few minutes) and builds
+It is built on [AntiStatic](https://github.com/AntAir267/AntiStatic-Recomp-Toolkit), a shared
+recompilation toolkit (its translator, its Windows stand-in runtime, its Direct3D 9 bridge to DXVK),
+pinned as the submodule third_party/antistatic.
+
+1. `git clone --recursive https://github.com/AntAir267/etm-native` (or `git submodule update
+   --init` in a clone).
+2. Put the game's files in a folder (by default ~/.local/share/etm-native/game).
+3. Set up Python: `python3 -m venv .venv && .venv/bin/pip install capstone`.
+4. Build SDL3 and DXVK into third_party/ as third_party/README.md describes.
+5. `make GAME=/path/to/the/game` translates the program into gen/ (a few minutes) and builds
    build/etm. `make install` puts it in ~/.local/opt/etm-native with an applications-menu entry.
 
 Settings and saves go to ~/.local/share/etm-native; each run writes last-run.log there.
@@ -58,6 +64,7 @@ now is playing it and reporting what goes wrong, with your last-run.log.
 
 ## Licence
 
-The Unlicense: public domain (LICENSE). Libraries used: DXVK and SDL3 (zlib licence, not
-included), dr_flac by David Reid (public domain or MIT-0, included in third_party/dr_libs).
+The Unlicense: public domain (LICENSE). Used: the AntiStatic toolkit (the Unlicense, a submodule),
+DXVK and SDL3 (zlib licence, not included), dr_flac by David Reid (public domain or MIT-0, included
+in third_party/dr_libs).
 Enter the Matrix and its files belong to their owners and are not part of this project.

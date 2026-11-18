@@ -17,13 +17,15 @@ rate=120 from=2300 frames=6910 every=10 out=work/rate dump= renderer= serial=0 h
 # statistics, frame counters (0x931f5c, 0x97ec48, 0x97ff48, 0x97ff54, 0xe7cca8), the level-of-detail scale
 # that follows the frame rate (0x97ecbc), the projection and inverse view the render pass keeps in the view
 # and its copies (0x97f2f0-0x97f310, 0x97f4b0-0x97f4f8, 0x151bc20-0x151bc50, 0x151bdf0-0x151be38),
-# shader-constant staging (0xe81000), skinned vertices with the blended pose (0x3c80000) [from their
+# shader-constant staging (0xe81000), skinned vertices with the blended pose (0x2d70000) [from their
 # values]; and written through 0x7c2006, the render pass's flush [verified: ETM_WATCH backtraces,
-# 2026-10-30]: the render queue's records (0x86f0000-0x8701000), with a pointer into them (0x153ae04) [guess:
-# its cursor], and the cached render state (0x93e884).
+# 2026-10-30]: the render queue's records (0x6ef0000-0x6f01000), with a pointer into them (0x153ae04) [guess:
+# its cursor], and the cached render state (0x93e884). The two heap areas move when the runtime's own
+# allocations change (AntiStatic v0.2.36: from 0x3c80000 and 0x86f0000): a difference only there, of
+# floats like positions and normals, is them; find their new place in the listing.
 DRAW_ONLY="00931f5c-00931f60 0093e884-0093e898 0097ec48-0097ec4c 0097ecbc-0097ecc0 0097f2f0-0097f310
  0097f4b0-0097f4f8 0097ff48-0097ff4c 0097ff54-0097ff58 00e7cca8-00e7ccb0 00e81000-00e82000
- 0151bc20-0151bc50 0151bdf0-0151be38 0153ae04-0153ae08 03c80000-03ca0000 086f0000-08701000"
+ 0151bc20-0151bc50 0151bdf0-0151be38 0153ae04-0153ae08 02d70000-02d90000 06ef0000-06f01000"
 while [ $# -gt 0 ]; do
     case "$1" in
     --rate) rate=$2; shift 2 ;;
@@ -71,7 +73,7 @@ if [ $auto = 1 ]; then
     done
     skips=()
     for r in $DRAW_ONLY; do skips+=(--skip "$r"); done
-    d=$(.venv/bin/python tools/memdiff.py "$out/mem_a.bin" "$out/mem_b.bin" --max 1000 "${skips[@]}" | grep -v '^[0-9]* differing\|^011f')
+    d=$(.venv/bin/python third_party/antistatic/translator/memdiff.py "$out/mem_a.bin" "$out/mem_b.bin" --max 1000 "${skips[@]}" | grep -E '^[0-9a-f]{8}-|^region' | grep -v '^011f')
     if [ -z "$d" ]; then
         echo "same at update $dump, apart from what is only drawing's"
         exit 0
@@ -81,7 +83,7 @@ if [ $auto = 1 ]; then
     exit 1
 fi
 if [ -n "$dump" ]; then
-    .venv/bin/python tools/memdiff.py "$out/mem_a.bin" "$out/mem_b.bin" --max 60
+    .venv/bin/python third_party/antistatic/translator/memdiff.py "$out/mem_a.bin" "$out/mem_b.bin" --max 60
     exit 0
 fi
 d=$(diff <(cut -d' ' -f1,3 "$out/hash_a.txt") <(cut -d' ' -f1,3 "$out/hash_b.txt") | grep '^[<>]' | head -2)
